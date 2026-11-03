@@ -129,6 +129,7 @@
   let cliff = clampInt(load('cliff_cur', 1), 1, 100000);          // cliff being played
   let checkpoint = clampInt(load('cliff_cp', 1), 1, cliff);       // where a lost life sends you back to
   let hearts = clampInt(load('cliff_hearts', HEARTS), 1, HEARTS);
+  let roundsPlayed = clampInt(load('cliff_rounds', 0), 0, 1e9);
   let bestCliff = clampInt(load('cliff_bestcliff', 1), cliff, 100000);   // the number players compete on
   const isCheckpoint = n => (n - 1) % CP_EVERY === 0;
   function saveProgress() {
@@ -207,6 +208,7 @@
       activePointer = e.pointerId;
       try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
       s.state = 'holding';
+      roundsPlayed++; save('cliff_rounds', roundsPlayed);
       Rec.start(s.id);
       return;
     }
@@ -858,9 +860,9 @@
   }
   function fmtTarget(cm) { return cm >= 100 ? (cm / 100) + ' m' : (cm >= 10 ? Math.round(cm) : cm.toFixed(1)) + ' cm'; }
 
-  function text(str, x, y, size, color, weight = 800) {
+  function text(str, x, y, size, color, weight = 800, align = 'center') {
     ctx.font = `${weight} ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
-    ctx.textAlign = 'center';
+    ctx.textAlign = align;
     ctx.textBaseline = 'middle';
     ctx.lineWidth = size * 0.18;
     ctx.strokeStyle = 'rgba(10,10,25,0.85)';
@@ -1106,6 +1108,12 @@
     ctx.lineTo(EDGE_X - 3, GROUND_Y - 18);
     ctx.fill();
 
+    // Ground type, written on the cliff face instead of the top of the screen.
+    ctx.font = '800 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillText(s.surface.name, EDGE_X - 16, GROUND_Y + 40);
+
     if (s.parts) drawParts(); else drawCar();
 
     // sea drawn over the pieces so sinking parts look underwater
@@ -1123,18 +1131,19 @@
     ctx.restore();
 
     // HUD (screen space)
-    text('BEST CLIFF ' + bestCliff, W / 2, 50, 24, '#ffffff', 800);
-    text(s.surface.name, W / 2, 86, 22, s.surface.top, 800);
+    text('BEST ' + bestCliff, 26, 50, 22, '#ffffff', 800, 'left');
 
     drawMuteIcon();
 
-    // Game link, always on screen so every recorded clip carries it.
+    // Game link on the end screens; every recorded clip ends on one, so clips carry it.
+    if (roundEnded()) {
     ctx.font = '700 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgba(10,10,25,0.45)';
     ctx.beginPath(); ctx.roundRect(W / 2 - 168, 930, 336, 26, 13); ctx.fill();
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.fillText('▶ waeel1899464.github.io/cliff-edge', W / 2, 944);
+    }
 
     // Top banner: friend challenge, or the endless run
     if (s.friend) {
@@ -1153,16 +1162,17 @@
         drawHearts(W / 2, 198, s.heartsLeft, true);
       }
     } else {
-      text(`CLIFF ${s.cliff}`, W / 2, 140, 20, '#ffd23f', 800);
-      text('STOP UNDER ' + fmtTarget(s.target), W / 2, 180, 38, '#ffffff', 900);
-      drawHearts(W / 2, 224, hearts, false);
-      const nextCp = Math.ceil(s.cliff / CP_EVERY) * CP_EVERY + 1;
-      text(s.cliff === 1 ? 'Each cliff is harder. Checkpoint every 5.' : `Checkpoint at cliff ${nextCp}`, W / 2, 262, 18, '#fff3c4', 600);
+      text(`CLIFF ${s.cliff}`, W / 2, 150, 20, '#ffd23f', 800);
+      text('UNDER ' + fmtTarget(s.target), W / 2, 194, 44, '#ffffff', 900);
+      drawHearts(W / 2, 242, hearts, false);
     }
 
     if (s.state === 'ready') {
-      text('HOLD TO DRIVE', W / 2, 360, 44, '#ffffff');
-      text('Release to stop at the edge', W / 2, 410, 24, '#fff3c4', 600);
+      // Teach the controls only in the first rounds; after that the screen stays clean.
+      if (roundsPlayed < 3) {
+        text('HOLD TO DRIVE', W / 2, 380, 40, '#ffffff');
+        text('Let go to stop at the edge', W / 2, 426, 22, '#fff3c4', 600);
+      }
     } else if (s.state === 'sliding') {
       text(fmt(Math.max(0, (edgeM - frontX()) * 100)), W / 2, 340, 52, 'rgba(255,255,255,0.9)');
     } else if (s.state === 'stopped') {
