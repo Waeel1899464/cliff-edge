@@ -212,6 +212,31 @@
   }
   let mode = 'run';   // 'run' = endless cliffs, 'daily' = today's challenge
 
+  // ---- Playtest metrics: anonymous events only (no names, emails or personal data) ----
+  // Sent only from the public site. The key is Supabase's public "publishable" key, made for web pages;
+  // the table accepts new rows only, so nobody can read or change the data with it.
+  const Track = (() => {
+    const URL_ = 'https://twgbgjwweanifxngkzrd.supabase.co/rest/v1/events';
+    const KEY = 'sb_publishable_fRMxd1l7QJ0Rj5Tvysw1jg_I60GWXjT';
+    const on = location.hostname === 'waeel1899464.github.io' || /[?&]track=1/.test(location.search);
+    const rid = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
+    let device = null;
+    try { device = localStorage.getItem('cliff_dev'); if (!device) { device = rid(); localStorage.setItem('cliff_dev', device); } } catch (e) {}
+    if (!device) device = rid();
+    const session = rid();
+    function send(event, value = null) {
+      if (!on) return;
+      try {
+        fetch(URL_, {
+          method: 'POST', keepalive: true,
+          headers: { 'apikey': KEY, 'Authorization': 'Bearer ' + KEY, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+          body: JSON.stringify({ device, session, event, value }),
+        }).catch(() => {});
+      } catch (e) {}
+    }
+    return { send };
+  })();
+
   function newRound() {
     // Rounded to the millimetre so a challenge link reproduces the round exactly.
     let si = Math.floor(Math.random() * SURFACES.length);
@@ -250,6 +275,7 @@
     particles = [];
   }
   newRound();
+  Track.send(friend ? 'challenge_open' : 'open', roundsPlayed);
 
   // ---------- Input: one press, one release ----------
   let activePointer = null;
@@ -274,6 +300,7 @@
       try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
       s.state = 'holding';
       roundsPlayed++; save('cliff_rounds', roundsPlayed);
+      Track.send(s.daily ? 'daily' : 'round', s.daily ? s.dailyTry : s.cliff);
       Rec.start(s.id);
       return;
     }
@@ -664,6 +691,7 @@
   }
 
   function doChallenge() {
+    Track.send('challenge', s.daily ? -1 : s.cliff);
     const url = challengeUrl(), msg = challengeText();
     if (navigator.share) {
       navigator.share({ title: 'Cliff Edge', text: msg, url }).catch(err => {
@@ -679,6 +707,7 @@
   // Must run inside a tap (pointerup) so phones allow the share sheet.
   const GAME_URL = 'https://waeel1899464.github.io/cliff-edge/';
   function doShare() {
+    Track.send('share_clip', s.cliff);
     const round = s;
     Rec.finish(round.id, blob => shareClip(blob, round));
   }
