@@ -470,7 +470,18 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     let finishing = -1;   // round whose recording is stopped but whose file is not ready yet
     let clip = null, clipRound = -1, recRound = -1;
     const MAX_MS = 12000;
-    function supported() { return !!(window.MediaRecorder && canvas.captureStream); }
+    // Recording reads a separate, smaller canvas (720x1280) that gets a copy of each game frame.
+    // Capturing the big game canvas directly broke drawing on some Android phones, and a smaller
+    // video is lighter to encode. 720x1280 is a normal vertical video size.
+    const recCanvas = document.createElement('canvas');
+    recCanvas.width = 720; recCanvas.height = 1280;
+    const recCtx = recCanvas.getContext('2d');
+    let copying = false;
+    function copyFrame() {
+      if (!copying) return;
+      try { recCtx.drawImage(canvas, 0, 0, recCanvas.width, recCanvas.height); } catch (e) {}
+    }
+    function supported() { return !!(window.MediaRecorder && recCanvas.captureStream); }
     // MP4 plays everywhere (WhatsApp, Messenger, TikTok). Some browsers claim MP4 but write a file
     // with no picture, so MP4 is used only after a half-second test recording proves it has video.
     // Until then (or if the test fails) WebM is used.
@@ -488,7 +499,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       const mp4 = MP4.find(can);
       if (!mp4 || !WEBM.find(can)) return;
       let st;
-      try { st = canvas.captureStream(30); } catch (e) { return; }
+      try { st = recCanvas.captureStream(30); } catch (e) { return; }
+      copying = true;
       const parts = [];
       let r;
       try { r = new MediaRecorder(st, { mimeType: mp4 }); } catch (e) { return; }
@@ -513,7 +525,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       stop();
       onReady = null;
       try {
-        if (!stream) stream = canvas.captureStream(30);
+        if (!stream) stream = recCanvas.captureStream(30);
+        copying = true;
         if (stream.getAudioTracks().length === 0) { const a = Sound.streamTrack(); if (a) stream.addTrack(a); }
         const mime = pickMime();
         const r = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 5000000 } : undefined);
@@ -553,7 +566,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       if (!!rec && recRound === roundId) { onReady = cb; stop(); }
       else if (finishing === roundId) { onReady = cb; }
     }
-    return { start, stop, tick, clipFor, recordingFor, finish, supported, format: () => pickMime() };
+    return { start, stop, tick, clipFor, recordingFor, finish, supported, copyFrame, format: () => pickMime() };
   })();
 
   // Inside claude.ai the page saves files through the viewer's downloads capability.
@@ -1204,6 +1217,10 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
 
   function draw() {
+    // Start every frame from a clean canvas state, so nothing left over from a previous
+    // frame (clip, transparency, transform) can hide the drawing.
+    if (ctx.reset) ctx.reset();
+    else { ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowBlur = 0; }
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
     if (shake > 0.3) ctx.translate(rand(-shake, shake), rand(-shake, shake));
 
@@ -1344,6 +1361,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     Sound.update(s);
     Rec.tick(s);
     draw();
+    Rec.copyFrame();
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
