@@ -11,7 +11,8 @@ const DAILY_AI_LIMIT = Number(Deno.env.get("MERGE_DAILY_AI_LIMIT") ?? "20000");
 const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
 });
-const ai = new Anthropic({ apiKey: Deno.env.get("ANTHROPIC_API_KEY") });
+let ai: Anthropic | null = null;     // made on first use, so the function runs even before the key is added
+const getAI = () => (ai ??= new Anthropic({ apiKey: Deno.env.get("ANTHROPIC_API_KEY") }));
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -60,7 +61,8 @@ const SCHEMA = {
 
 async function askAI(t: number, a: string, b: string) {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const msg = await ai.messages.create({
+    if (!Deno.env.get("ANTHROPIC_API_KEY")) return null;
+    const msg = await getAI().messages.create({
       model: MODEL,
       max_tokens: 1024,
       system: SYSTEM,
