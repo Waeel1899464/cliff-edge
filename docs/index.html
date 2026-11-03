@@ -50,7 +50,44 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
   }
+  /* Share panel shown when the browser has no share menu (in-app browsers). */
+  .sheet {
+    position: fixed; inset: 0; z-index: 20;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(8, 9, 20, 0.72);
+    padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .sheet-card {
+    width: 100%; max-width: 360px;
+    background: #1d2033; color: #f4f1ff;
+    border-radius: 22px; padding: 22px 20px 16px;
+    display: flex; flex-direction: column; gap: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  }
+  .sheet-card h2 { margin: 0; font-size: 22px; font-weight: 900; text-wrap: balance; }
+  .sheet-card p { margin: 0 0 4px; font-size: 15px; line-height: 1.45; color: #cfd0e6; }
+  .sheet-actions { display: flex; flex-direction: column; gap: 10px; }
+  .sheet-btn {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 52px; padding: 0 16px; border-radius: 26px; border: 0;
+    font: 800 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    text-decoration: none; cursor: pointer;
+    background: #2c3050; color: #ffffff;
+  }
+  .sheet-btn.primary { background: #ffd23f; color: #12141f; }
+  .sheet-btn.ghost { background: transparent; color: #a9abc8; min-height: 44px; }
+  .sheet-btn:focus-visible { outline: 3px solid #7ef9ff; outline-offset: 2px; }
 </style>
+
+<div id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+  <div class="sheet-card">
+    <h2 id="sheet-title"></h2>
+    <p id="sheet-text"></p>
+    <div id="sheet-actions" class="sheet-actions"></div>
+    <button id="sheet-close" class="sheet-btn ghost" type="button">Close</button>
+  </div>
+</div>
 
 <canvas id="game" aria-label="Cliff Edge game. Press and hold to drive, release to stop as close to the edge as you can."></canvas>
 
@@ -483,22 +520,89 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (s.result !== null) return `I stopped ${fmt(s.result)} from the cliff edge! Can you beat me on the same cliff?`;
     return `I flew off the cliff 😂 Can you stop at the edge? Same cliff:`;
   }
-  function copyChallenge(msg, url) {
-    try {
-      navigator.clipboard.writeText(msg + ' ' + url)
-        .then(() => showToast('Link copied!\nPaste it in a chat with a friend', 3500))
-        .catch(() => showToast('Could not copy the link'));
-    } catch (e) { showToast('Could not copy the link'); }
+  // ---- Share panel for browsers without a share menu (Messenger, Facebook, TikTok... on Android) ----
+  const sheetEl = document.getElementById('sheet');
+  function openSheet(title, body, actions) {
+    document.getElementById('sheet-title').textContent = title;
+    document.getElementById('sheet-text').textContent = body;
+    const box = document.getElementById('sheet-actions');
+    box.textContent = '';
+    actions.forEach(a => {
+      const el = document.createElement(a.href ? 'a' : 'button');
+      el.className = 'sheet-btn' + (a.primary ? ' primary' : '');
+      el.textContent = a.label;
+      if (a.href) { el.href = a.href; if (a.newTab) { el.target = '_blank'; el.rel = 'noopener'; } }
+      else el.type = 'button';
+      if (a.onClick) el.addEventListener('click', () => a.onClick(el));
+      box.appendChild(el);
+    });
+    sheetEl.hidden = false;
   }
+  function closeSheet() { sheetEl.hidden = true; }
+  document.getElementById('sheet-close').addEventListener('click', closeSheet);
+  sheetEl.addEventListener('click', e => { if (e.target === sheetEl) closeSheet(); });
+  sheetEl.addEventListener('pointerdown', e => e.stopPropagation());
+  window.addEventListener('keydown', e => { if (e.key === 'Escape' && !sheetEl.hidden) closeSheet(); });
+
+  // Copy that also works inside in-app browsers, where the newer clipboard call is often blocked.
+  function copyText(str) {
+    let ok = false;
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = str; ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.opacity = '0'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, str.length);
+      ok = document.execCommand('copy');
+      ta.remove();
+    } catch (e) {}
+    if (!ok) { try { navigator.clipboard.writeText(str); ok = true; } catch (e) {} }
+    return ok;
+  }
+  function copyAction(label, str, primary = true) {
+    return { label, primary, onClick: el => {
+      el.textContent = copyText(str) ? 'Copied! Paste it in the chat' : 'Copy failed. Press and hold the link';
+    } };
+  }
+  function challengeSheet(msg, url) {
+    const full = msg + ' ' + url;
+    openSheet('Challenge a friend',
+      'Send this to a friend. They play the same cliff and try to beat you.',
+      [
+        copyAction('Copy link', full),
+        { label: 'WhatsApp', href: 'https://wa.me/?text=' + encodeURIComponent(full), newTab: true },
+        { label: 'Telegram', href: 'https://t.me/share/url?url=' + encodeURIComponent(url) + '&text=' + encodeURIComponent(msg), newTab: true },
+      ]);
+  }
+  function isAndroid() { return /Android/i.test(navigator.userAgent || ''); }
+  // Android only: a link that hands this page to Chrome (documented Chrome intent link).
+  function chromeIntentUrl() {
+    const u = new URL(GAME_URL);
+    return 'intent://' + u.host + u.pathname + '#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(GAME_URL) + ';end';
+  }
+  function clipSheet() {
+    if (isAndroid()) {
+      openSheet('Share your clip',
+        "This app's browser can't share videos. Open the game in Chrome, play a round, then tap SHARE CLIP.",
+        [
+          { label: 'Open in Chrome', href: chromeIntentUrl(), primary: true },
+          copyAction('Copy game link', GAME_URL, false),
+        ]);
+    } else {
+      openSheet('Share your clip',
+        "This app's browser can't share videos. Tap the ••• or share icon, choose Open in Safari, play a round, then tap SHARE CLIP.",
+        [copyAction('Copy game link', GAME_URL)]);
+    }
+  }
+
   function doChallenge() {
     const url = challengeUrl(), msg = challengeText();
     if (navigator.share) {
       navigator.share({ title: 'Cliff Edge', text: msg, url }).catch(err => {
         if (err && err.name === 'AbortError') return;   // player closed the share menu
-        copyChallenge(msg, url);
+        challengeSheet(msg, url);
       });
     } else {
-      copyChallenge(msg, url);
+      challengeSheet(msg, url);
     }
   }
   function showToast(msg, ms = 2600) { toast = { msg, until: performance.now() + ms }; }
@@ -537,12 +641,15 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
           // AbortError = the player closed the share menu.
           if (err && err.name === 'AbortError') return;
           if (err && err.name === 'NotAllowedError') { showToast('Tap SHARE CLIP again'); return; }
+          if (inAppBrowser()) { clipSheet(); return; }
           saveFile(blob, file.name); explainSave('no-video-share');
         });
         return;
       }
     }
-    // Fallback: save the video file and say why sharing was not possible.
+    // In-app browsers can't share or save videos: offer the way out to Chrome / Safari.
+    if (inAppBrowser() && window.top === window) { clipSheet(); return; }
+    // Other browsers: save the video file and say why sharing was not possible.
     saveFile(blob, file.name);
     explainSave(why);
   }
