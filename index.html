@@ -16,11 +16,13 @@
     padding-right: max(0px, env(safe-area-inset-right, 0px));
     display: flex; align-items: center; justify-content: center;
     user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    overscroll-behavior: none;
   }
   canvas {
     display: block;
     touch-action: none;
     -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
   }
 </style>
 
@@ -30,32 +32,35 @@
 (() => {
   // ---------- Setup ----------
   const W = 540, H = 960;            // logical size (9:16)
-  const PPM = 30;                    // pixels per meter
+  const PPM = 30;                    // pixels per meter (at zoom 1)
   const EDGE_X = 430;                // cliff edge, in logical pixels
   const GROUND_Y = 620;              // top of the cliff
   const CAR_LEN = 1.6;               // meters
   const ACCEL = 7;                   // m/s² while holding
   const GRAVITY = 30;                // m/s² when falling
+  const CAM_ANCHOR_X = W * 0.55;     // where the camera focus sits on screen
 
+  // Braking: deceleration = base + drag * speed.
+  // The drag part makes the car ease out smoothly instead of stopping dead.
+  // Stopping distance from 8 m/s: road ≈ 5 m, ice ≈ 10.5 m, mud ≈ 2.6 m.
   const SURFACES = [
-    { name: 'ROAD', friction: 6,   top: '#5b5f73', side: '#3d4052' },
-    { name: 'ICE',  friction: 2.2, top: '#bfe9ff', side: '#7cc4e6' },
-    { name: 'MUD',  friction: 11,  top: '#8a5a33', side: '#5e3b1f' },
+    { name: 'ROAD', base: 2.0, drag: 0.9,  top: '#6a6e84', side: '#3d4052', dust: '#c9cbd6' },
+    { name: 'ICE',  base: 0.9, drag: 0.45, top: '#d4f1ff', side: '#7cc4e6', dust: '#ffffff' },
+    { name: 'MUD',  base: 4.0, drag: 1.8,  top: '#8a5a33', side: '#5e3b1f', dust: '#a8774a' },
   ];
 
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
-  let scale = 1;
+  let scale = 1, dpr = 1;
 
   function resize() {
     const vw = document.body.clientWidth, vh = document.body.clientHeight;
     scale = Math.min(vw / W, vh / H);
-    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    dpr = Math.min(window.devicePixelRatio || 1, 3);
     canvas.style.width = (W * scale) + 'px';
     canvas.style.height = (H * scale) + 'px';
     canvas.width = Math.round(W * scale * dpr);
     canvas.height = Math.round(H * scale * dpr);
-    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
   }
   window.addEventListener('resize', resize);
   resize();
@@ -68,49 +73,88 @@
   // ---------- Round state ----------
   // states: ready -> holding -> sliding -> stopped | falling -> fell
   let s;
+  const cam = { z: 1, fx: CAM_ANCHOR_X };
+  let particles = [];
+
   function newRound() {
     const surface = SURFACES[Math.floor(Math.random() * SURFACES.length)];
     const dist = 8 + Math.random() * 5;              // meters from car front to edge
     s = {
       state: 'ready',
       surface,
-      vmax: 6 + Math.random() * 4,
+      vmax: 6 + Math.random() * 3,
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
-      v: 0, y: 0, vy: 0, rot: 0,
-      result: null,
+      v: 0, a: 0, y: 0, vy: 0, rot: 0,
+      tilt: 0, tiltV: 0,                              // body pitch (spring)
+      result: null, newBest: false,
       endAt: 0,
     };
+    particles = [];
   }
   newRound();
 
   // ---------- Input: one press, one release ----------
+  let activePointer = null;
   function press(e) {
     e.preventDefault();
     const now = performance.now();
-    if (s.state === 'ready') { s.state = 'holding'; return; }
+    if (s.state === 'ready') {
+      activePointer = e.pointerId;
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+      s.state = 'holding';
+      return;
+    }
     if ((s.state === 'stopped' || s.state === 'fell' || s.state === 'falling') && now - s.endAt > 250) {
       newRound();
     }
   }
   function release(e) {
-    e.preventDefault();
+    if (activePointer !== null && e.pointerId !== activePointer) return;
+    activePointer = null;
     if (s.state === 'holding') s.state = 'sliding';
   }
   canvas.addEventListener('pointerdown', press);
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('lostpointercapture', release);
   window.addEventListener('pointerup', release);
   window.addEventListener('pointercancel', release);
-  window.addEventListener('contextmenu', e => e.preventDefault());
+  // Stop phones from treating a long press as text selection, zoom or scroll.
+  const block = e => e.preventDefault();
+  canvas.addEventListener('touchstart', block, { passive: false });
+  canvas.addEventListener('touchmove', block, { passive: false });
+  canvas.addEventListener('touchend', block, { passive: false });
+  window.addEventListener('contextmenu', block);
 
   // ---------- Update ----------
+  const edgeM = EDGE_X / PPM;
   function frontX() { return s.x + CAR_LEN; }
 
+  function spawnDust(n) {
+    for (let i = 0; i < n; i++) {
+      particles.push({
+        x: s.x * PPM + 8 + Math.random() * 6,
+        y: GROUND_Y - 2,
+        vx: -(20 + Math.random() * 40) + s.v * 6,
+        vy: -(15 + Math.random() * 45),
+        life: 0.45 + Math.random() * 0.3,
+        t: 0,
+        r: 2 + Math.random() * 3,
+      });
+    }
+  }
+
   function update(dt) {
-    const edgeM = EDGE_X / PPM;
+    const prevV = s.v;
     if (s.state === 'holding') {
       s.v = Math.min(s.vmax, s.v + ACCEL * dt);
     } else if (s.state === 'sliding') {
-      s.v = Math.max(0, s.v - s.surface.friction * dt);
+      const decel = s.surface.base + s.surface.drag * s.v;
+      s.v = Math.max(0, s.v - decel * dt);
+      if (s.v < 0.01) s.v = 0;
+      if (s.v > 0.4 && Math.random() < 0.9) spawnDust(Math.random() < s.v / 6 ? 2 : 1);
     }
+    s.a = dt > 0 ? (s.v - prevV) / dt : 0;
+
     if (s.state === 'holding' || s.state === 'sliding') {
       s.x += s.v * dt;
       if (frontX() > edgeM) {
@@ -127,8 +171,34 @@
       s.vy += GRAVITY * dt;
       s.y += s.vy * dt;
       s.rot += (2 + s.v * 0.6) * dt;
-      if (s.y * PPM > H) s.state = 'fell';
     }
+
+    // Body pitch: nose up when speeding up, nose down when braking, then a springy settle.
+    const targetTilt = (s.state === 'holding' || s.state === 'sliding') ? -s.a * 0.012 : 0;
+    const k = 120, damp = 9;
+    s.tiltV += ((targetTilt - s.tilt) * k - s.tiltV * damp) * dt;
+    s.tilt += s.tiltV * dt;
+
+    // Dust
+    for (const p of particles) {
+      p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 80 * dt;
+    }
+    particles = particles.filter(p => p.t < p.life);
+
+    // Camera: zoom in toward the edge as the car gets close, so the last centimeters are visible.
+    let zt = 1, ft = CAM_ANCHOR_X;
+    if (s.state === 'sliding' || s.state === 'stopped') {
+      const d = edgeM - frontX();
+      const near = Math.max(0, Math.min(1, 1 - d / 3));
+      zt = 1 + 2.4 * near * near;
+      const focus = (frontX() * PPM + EDGE_X) / 2;
+      ft = CAM_ANCHOR_X + (focus - CAM_ANCHOR_X) * near;
+    } else if (s.state === 'falling' || s.state === 'fell') {
+      zt = cam.z; ft = cam.fx;                         // hold the shot while it falls
+    }
+    const ease = 1 - Math.exp(-dt * 5);
+    cam.z += (zt - cam.z) * ease;
+    cam.fx += (ft - cam.fx) * ease;
   }
 
   // ---------- Draw ----------
@@ -150,32 +220,46 @@
   }
 
   function drawCar() {
-    const len = CAR_LEN * PPM, h = 26;
+    const len = CAR_LEN * PPM, h = 26, wheelR = 8;
     const cx = s.x * PPM + len / 2;
-    const cy = GROUND_Y + s.y * PPM - h / 2 - 8;
+    const groundY = GROUND_Y + s.y * PPM;
+    const braking = s.state === 'sliding' && s.v > 0;
+
     ctx.save();
-    ctx.translate(cx, cy);
+    ctx.translate(cx, groundY - wheelR);
     ctx.rotate(s.rot);
-    // body
+
+    // wheels (stay on the ground)
+    ctx.fillStyle = '#1b1d2b';
+    ctx.beginPath(); ctx.arc(-len / 2 + 11, 0, wheelR, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(len / 2 - 11, 0, wheelR, 0, Math.PI * 2); ctx.fill();
+
+    // body pitches on its suspension
+    ctx.rotate(s.tilt);
+    ctx.translate(0, -h / 2 - 2);
     ctx.fillStyle = '#ff4f7b';
     ctx.beginPath(); ctx.roundRect(-len / 2, -h / 2, len, h, 8); ctx.fill();
-    // cabin
     ctx.fillStyle = '#ffd23f';
     ctx.beginPath(); ctx.roundRect(-len / 2 + 6, -h / 2 - 16, len * 0.5, 18, 6); ctx.fill();
-    // eye (looks at the edge)
+    // brake light
+    ctx.fillStyle = braking ? '#ff1f3d' : '#7a2236';
+    if (braking) { ctx.shadowColor = '#ff1f3d'; ctx.shadowBlur = 14; }
+    ctx.beginPath(); ctx.roundRect(-len / 2 - 2, -h / 2 + 4, 5, 8, 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    // eye looks at the edge; widens when close
+    const d = edgeM - frontX();
+    const scared = (s.state === 'sliding' || s.state === 'stopped') && d < 1 && d >= 0;
     ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(len / 2 - 10, -3, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(len / 2 - 10, -3, scared ? 9 : 7, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#12141f';
-    ctx.beginPath(); ctx.arc(len / 2 - 7, -3, 3.5, 0, Math.PI * 2); ctx.fill();
-    // wheels
-    ctx.fillStyle = '#1b1d2b';
-    ctx.beginPath(); ctx.arc(-len / 2 + 11, h / 2, 8, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(len / 2 - 11, h / 2, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(len / 2 - 7, -3, scared ? 2.5 : 3.5, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   }
 
   function draw() {
-    // sky
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+
+    // sky (screen space)
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, '#2a1f5c');
     g.addColorStop(0.6, '#ff7a59');
@@ -183,42 +267,57 @@
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
 
-    // far sea below the cliff
+    // world (camera space)
+    ctx.save();
+    ctx.translate(CAM_ANCHOR_X, GROUND_Y);
+    ctx.scale(cam.z, cam.z);
+    ctx.translate(-cam.fx, -GROUND_Y);
+
     ctx.fillStyle = '#1f3d7a';
-    ctx.fillRect(0, H - 150, W, 150);
+    ctx.fillRect(-2000, H - 150, 6000, 3000);
 
-    // cliff
     ctx.fillStyle = s.surface.side;
-    ctx.fillRect(0, GROUND_Y + 14, EDGE_X, H - GROUND_Y);
+    ctx.fillRect(-2000, GROUND_Y + 14, EDGE_X + 2000, 3000);
     ctx.fillStyle = s.surface.top;
-    ctx.fillRect(0, GROUND_Y, EDGE_X, 14);
+    ctx.fillRect(-2000, GROUND_Y, EDGE_X + 2000, 14);
 
-    // edge marker
+    // edge flag
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(EDGE_X - 3, GROUND_Y - 30, 3, 30);
     ctx.fillStyle = '#ff3355';
     ctx.beginPath();
     ctx.moveTo(EDGE_X - 3, GROUND_Y - 30);
-    ctx.lineTo(EDGE_X - 25, GROUND_Y - 24);
+    ctx.lineTo(EDGE_X + 19, GROUND_Y - 24);
     ctx.lineTo(EDGE_X - 3, GROUND_Y - 18);
     ctx.fill();
 
-    drawCar();
+    // dust
+    ctx.fillStyle = s.surface.dust;
+    for (const p of particles) {
+      ctx.globalAlpha = 0.7 * (1 - p.t / p.life);
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (1 + p.t * 2), 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
 
-    // HUD
+    drawCar();
+    ctx.restore();
+
+    // HUD (screen space)
     text('BEST ' + (best === null ? '—' : fmt(best)), W / 2, 60, 26, '#ffffff', 700);
-    text(s.surface.name, 90, GROUND_Y + 60, 28, s.surface.top);
+    text(s.surface.name, W / 2, 100, 24, s.surface.top, 800);
 
     if (s.state === 'ready') {
       text('HOLD TO DRIVE', W / 2, 260, 44, '#ffffff');
       text('Release to stop at the edge', W / 2, 315, 24, '#fff3c4', 600);
+    } else if (s.state === 'sliding') {
+      text(fmt(Math.max(0, (edgeM - frontX()) * 100)), W / 2, 250, 52, 'rgba(255,255,255,0.9)');
     } else if (s.state === 'stopped') {
       text(fmt(s.result), W / 2, 250, 76, '#ffffff');
       text(s.newBest ? 'NEW BEST!' : 'from the edge', W / 2, 320, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
-      text('TAP TO PLAY AGAIN', W / 2, 820, 30, '#ffffff', 700);
+      text('TAP TO PLAY AGAIN', W / 2, 860, 30, '#ffffff', 700);
     } else if (s.state === 'falling' || s.state === 'fell') {
       text('YOU FELL!', W / 2, 260, 64, '#ffffff');
-      text('TAP TO TRY AGAIN', W / 2, 820, 30, '#ffffff', 700);
+      text('TAP TO TRY AGAIN', W / 2, 860, 30, '#ffffff', 700);
     }
   }
 
@@ -232,5 +331,6 @@
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+  window.__cliff = () => s;   // used only for automated testing
 })();
 </script>
