@@ -17,7 +17,13 @@ cat <<'HEAD'
 <meta property="og:title" content="Cliff Edge">
 <meta property="og:description" content="Hold to drive, let go to stop. How close to the cliff edge can you stop?">
 <meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
+<meta property="og:url" content="https://waeel1899464.github.io/cliff-edge/">
+<meta property="og:image" content="https://waeel1899464.github.io/cliff-edge/preview.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A worried pink car stopping at the edge of a cliff">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://waeel1899464.github.io/cliff-edge/preview.jpg">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <style>
 *,*::before,*::after{box-sizing:border-box}
