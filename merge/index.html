@@ -1,0 +1,992 @@
+<title>Merge Anything</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  /* One 9:16 canvas, centered and letterboxed. A single warm "paper and stickers" look by choice. */
+  :root { --bg: #f3e9d8; --fg: #2b2233; color-scheme: light; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    overflow: hidden;
+    padding-left: max(0px, env(safe-area-inset-left, 0px));
+    padding-right: max(0px, env(safe-area-inset-right, 0px));
+    display: flex; align-items: center; justify-content: center;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    overscroll-behavior: none;
+  }
+  canvas { display: block; touch-action: none; -webkit-tap-highlight-color: transparent; }
+</style>
+
+<canvas id="game" aria-label="Merge Anything. Tap to drop things into the jar. Two things of the same size fuse into something new."></canvas>
+
+<script>
+(() => {
+  'use strict';
+  // =====================================================================
+  // Settings
+  // =====================================================================
+  const W = 540, H = 960;                 // logical size (9:16)
+  // Server that asks the AI what two things make. Empty = offline mode (built-in recipes only).
+  const API_URL = '';
+
+  const JAR_L = 50, JAR_R = 490;          // inner walls
+  const JAR_TOP = 304;                    // rim = danger line
+  const FLOOR = 884;                      // inner floor
+  const DROP_Y = 236;                     // where the held item hangs
+  const MAX_TIER = 10;
+  const RADII = [0, 26, 34, 43, 54, 66, 80, 95, 112, 131, 152];
+  const DROP_ODDS = [0, 0.4, 0.35, 0.25];  // chance of dropping a level 1, 2 or 3 thing
+  const GRAVITY = 2600;                   // px/s²
+  const STEP = 1 / 120;
+  const DROP_COOLDOWN = 0.42;             // seconds before the next item is ready
+  const OVER_LIMIT = 2.2;                 // seconds above the rim before the jar bursts
+  const INK = '#2b2233';
+  const PALETTE = ['#ff8fa3', '#ffb86b', '#ffe066', '#a5e37a', '#6fd6c7', '#7cc4ff',
+                   '#a99bff', '#f6a3dc', '#ff9f7a', '#cfe86a', '#8fe3ff', '#ffc9a8'];
+  const EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla",sans-serif';
+  const FONT = 'Fredoka, ui-rounded, "Arial Rounded MT Bold", system-ui, sans-serif';
+
+  // =====================================================================
+  // Recipe book. Level 1 = the four elements, levels 2-3 are written by hand
+  // so the game works instantly and offline. Level 4+ comes from the AI server.
+  // =====================================================================
+  const BASE = [
+    { n: 'Water', e: '💧' }, { n: 'Fire', e: '🔥' }, { n: 'Earth', e: '🌍' }, { n: 'Wind', e: '🌬️' },
+  ];
+  const BOOK_RAW = {
+    2: [
+      ['Water', 'Water', 'Ocean', '🌊'], ['Fire', 'Fire', 'Sun', '☀️'], ['Earth', 'Earth', 'Mountain', '⛰️'],
+      ['Wind', 'Wind', 'Tornado', '🌪️'], ['Water', 'Fire', 'Steam', '♨️'], ['Water', 'Earth', 'Plant', '🌱'],
+      ['Water', 'Wind', 'Cloud', '☁️'], ['Fire', 'Earth', 'Volcano', '🌋'], ['Fire', 'Wind', 'Lightning', '⚡'],
+      ['Earth', 'Wind', 'Desert', '🏜️'],
+    ],
+    3: [
+      ['Ocean', 'Ocean', 'Whale', '🐋'], ['Ocean', 'Sun', 'Beach', '🏖️'], ['Ocean', 'Mountain', 'Island', '🏝️'],
+      ['Ocean', 'Tornado', 'Hurricane', '🌀'], ['Ocean', 'Steam', 'Spa Day', '🧖'], ['Ocean', 'Plant', 'Sea Turtle', '🐢'],
+      ['Ocean', 'Cloud', 'Rain', '🌧️'], ['Ocean', 'Volcano', 'Kraken', '🦑'], ['Ocean', 'Lightning', 'Thunder Shark', '🦈'],
+      ['Ocean', 'Desert', 'Oasis', '🌴'],
+      ['Sun', 'Sun', 'Supernova', '🌟'], ['Sun', 'Mountain', 'Sunrise', '🌄'], ['Sun', 'Tornado', 'Heatwave', '🥵'],
+      ['Sun', 'Steam', 'Coffee', '☕'], ['Sun', 'Plant', 'Sunflower', '🌻'], ['Sun', 'Cloud', 'Rainbow', '🌈'],
+      ['Sun', 'Volcano', 'Dinosaur', '🦖'], ['Sun', 'Lightning', 'Battery', '🔋'], ['Sun', 'Desert', 'Cactus', '🌵'],
+      ['Mountain', 'Mountain', 'Snowy Peak', '🏔️'], ['Mountain', 'Tornado', 'Eagle', '🦅'], ['Mountain', 'Steam', 'Steam Train', '🚂'],
+      ['Mountain', 'Plant', 'Forest', '🌲'], ['Mountain', 'Cloud', 'Snow', '❄️'], ['Mountain', 'Volcano', 'Diamond', '💎'],
+      ['Mountain', 'Lightning', 'Wizard', '🧙'], ['Mountain', 'Desert', 'Camel', '🐪'],
+      ['Tornado', 'Tornado', 'Flying Cow', '🐄'], ['Tornado', 'Steam', 'Helicopter', '🚁'], ['Tornado', 'Plant', 'Autumn', '🍂'],
+      ['Tornado', 'Cloud', 'Storm', '⛈️'], ['Tornado', 'Volcano', 'Meteor', '☄️'], ['Tornado', 'Lightning', 'Superhero', '🦸'],
+      ['Tornado', 'Desert', 'Sandstorm', '🌫️'],
+      ['Steam', 'Steam', 'Ramen', '🍜'], ['Steam', 'Plant', 'Tea', '🍵'], ['Steam', 'Cloud', 'Ghost', '👻'],
+      ['Steam', 'Volcano', 'Hot Tub', '🛁'], ['Steam', 'Lightning', 'Robot', '🤖'], ['Steam', 'Desert', 'Genie', '🧞'],
+      ['Plant', 'Plant', 'Tree', '🌳'], ['Plant', 'Cloud', 'Cotton Candy', '🍭'], ['Plant', 'Volcano', 'Chili Pepper', '🌶️'],
+      ['Plant', 'Lightning', 'Broccoli', '🥦'], ['Plant', 'Desert', 'Tumbleweed', '🌾'],
+      ['Cloud', 'Cloud', 'Sheep', '🐑'], ['Cloud', 'Volcano', 'Factory', '🏭'], ['Cloud', 'Lightning', 'WiFi', '📶'],
+      ['Cloud', 'Desert', 'Mirage', '✨'],
+      ['Volcano', 'Volcano', 'Dragon', '🐉'], ['Volcano', 'Lightning', 'Dynamite', '🧨'], ['Volcano', 'Desert', 'Scorpion', '🦂'],
+      ['Lightning', 'Lightning', 'Light Bulb', '💡'], ['Lightning', 'Desert', 'Magic Glass', '🔮'],
+      ['Desert', 'Desert', 'Fossil', '🦴'],
+    ],
+  };
+  const norm = s => String(s).trim().toLowerCase().replace(/\s+/g, ' ');
+  const comboKey = (t, a, b) => { const x = [norm(a), norm(b)].sort(); return t + '|' + x[0] + '+' + x[1]; };
+  const BOOK = new Map();
+  const POOL = { 1: BASE.slice(), 2: [], 3: [] };
+  for (const t of [2, 3]) for (const [a, b, n, e] of BOOK_RAW[t]) {
+    BOOK.set(comboKey(t, a, b), { n, e });
+    POOL[t].push({ n, e });
+  }
+
+  // =====================================================================
+  // Canvas and scaling
+  // =====================================================================
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  let scale = 1, dpr = 1;
+  const sprites = new Map();          // cached item drawings
+  function resize() {
+    const vw = document.body.clientWidth, vh = document.body.clientHeight;
+    scale = Math.min(vw / W, vh / H);
+    dpr = Math.min(window.devicePixelRatio || 1, 1080 / (W * scale));
+    canvas.style.width = (W * scale) + 'px';
+    canvas.style.height = (H * scale) + 'px';
+    canvas.width = Math.round(W * scale * dpr);
+    canvas.height = Math.round(H * scale * dpr);
+    sprites.clear();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+  if (document.fonts && document.fonts.load) {
+    Promise.all([document.fonts.load('700 20px Fredoka'), document.fonts.load('500 20px Fredoka')])
+      .then(() => sprites.clear()).catch(() => {});
+  }
+
+  // =====================================================================
+  // Saved data (may be unavailable: private mode, previews)
+  // =====================================================================
+  function loadJSON(key, fb) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fb; } catch (e) { return fb; } }
+  function saveJSON(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
+  let best = loadJSON('merge_best', 0);
+  const book = loadJSON('merge_book', {});         // things this player has made: "t|name" -> {n,e,t,first}
+  const comboCache = loadJSON('merge_cache', {});  // AI answers already received
+  let worldFirsts = loadJSON('merge_firsts', 0);
+  const discoveredCount = () => Object.keys(book).length;
+
+  // =====================================================================
+  // Helpers
+  // =====================================================================
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  function hash(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+  const colorOf = name => PALETTE[hash(norm(name)) % PALETTE.length];
+  const points = t => t * (t + 1) / 2;
+  function pickDrop() {
+    let r = Math.random(), t = 1;
+    while (t < DROP_ODDS.length - 1 && r >= DROP_ODDS[t]) { r -= DROP_ODDS[t]; t++; }
+    const p = POOL[t];
+    return { t, item: p[Math.floor(Math.random() * p.length)] };
+  }
+
+  // =====================================================================
+  // What do two things make? Built-in book -> saved answers -> AI server -> offline guess
+  // =====================================================================
+  const inflight = new Map();
+  function askCombo(a, b, t) {
+    const key = comboKey(t, a.n, b.n);
+    if (BOOK.has(key)) return Promise.resolve(Object.assign({ first: false }, BOOK.get(key)));
+    if (comboCache[key]) return Promise.resolve(Object.assign({ first: false }, comboCache[key]));
+    if (inflight.has(key)) return inflight.get(key);
+    let p;
+    if (!API_URL) p = Promise.resolve(offlineCombo(a, b, t));
+    else {
+      p = fetchWithTimeout(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },   // plain text: no extra preflight round trip
+        body: JSON.stringify({ t, a: a.n, b: b.n }),
+      }, 7000)
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('http ' + r.status)))
+        .then(d => {
+          if (!d || typeof d.n !== 'string' || typeof d.e !== 'string') throw new Error('bad answer');
+          const res = { n: d.n.slice(0, 28), e: d.e.slice(0, 16), first: !!d.first };
+          comboCache[key] = { n: res.n, e: res.e };
+          saveJSON('merge_cache', comboCache);
+          return res;
+        })
+        .catch(() => offlineCombo(a, b, t));
+    }
+    inflight.set(key, p);
+    p.finally(() => inflight.delete(key));
+    return p;
+  }
+  function fetchWithTimeout(url, opts, ms) {
+    const ctl = window.AbortController ? new AbortController() : null;
+    const timer = setTimeout(() => ctl && ctl.abort(), ms);
+    return fetch(url, Object.assign({}, opts, ctl ? { signal: ctl.signal } : {})).finally(() => clearTimeout(timer));
+  }
+  // Used only when there is no connection to the AI: a playful guess built from the two names.
+  function offlineCombo(a, b, t) {
+    const h = hash(comboKey(t, a.n, b.n));
+    const last = s => s.split(' ').pop(), first = s => s.split(' ')[0];
+    const [A, B] = (h & 1) ? [a.n, b.n] : [b.n, a.n];
+    const pre = ['Mega', 'Tiny', 'Royal', 'Haunted', 'Cosmic', 'Turbo', 'Sleepy', 'Golden', 'Grumpy', 'Fancy', 'Ancient', 'Disco'];
+    const suf = ['King', 'Monster', 'Party', 'Machine', 'Wizard', 'Planet', 'Burger', 'Festival', 'Kingdom', 'Titan'];
+    const forms = [
+      () => pre[(h >>> 3) % pre.length] + ' ' + last(B),
+      () => last(A) + ' ' + suf[(h >>> 5) % suf.length],
+      () => first(A) + ' ' + last(B),
+    ];
+    let n = forms[(h >>> 1) % forms.length]();
+    if (norm(n) === norm(a.n) || norm(n) === norm(b.n)) n = pre[h % pre.length] + ' ' + last(B);
+    return { n: n.slice(0, 24), e: (h >>> 8) & 1 ? a.e : b.e, first: false, offline: true };
+  }
+
+  // =====================================================================
+  // Sound (all synthesized)
+  // =====================================================================
+  const Sound = (() => {
+    let ac = null, master = null, noise = null;
+    let muted = loadJSON('merge_muted', 0) === 1;
+    function init() {
+      if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      try { ac = new AC(); } catch (e) { return; }
+      master = ac.createGain(); master.gain.value = muted ? 0 : 0.8;
+      const comp = ac.createDynamicsCompressor();
+      comp.threshold.value = -10; comp.ratio.value = 12; comp.attack.value = 0.003; comp.release.value = 0.15;
+      master.connect(comp); comp.connect(ac.destination);
+      noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+      const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    function env(g, t, peak, a, d) {
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + a);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + a + d);
+    }
+    function tone(freq, when, dur, vol, type = 'sine', slideTo = 0) {
+      if (!ac) return;
+      const t = ac.currentTime + when;
+      const o = ac.createOscillator(); o.type = type;
+      o.frequency.setValueAtTime(freq, t);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+      const g = ac.createGain(); env(g, t, vol, 0.006, dur);
+      o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.05);
+    }
+    // Rising musical scale: every bigger merge sings a higher note.
+    const SCALE = [0, 262, 294, 330, 392, 440, 523, 587, 659, 784, 880, 1047];
+    const drop = () => tone(240, 0, 0.09, 0.12, 'triangle', 150);
+    function merge(t) {
+      const f = SCALE[Math.min(t, 11)];
+      tone(f * 0.75, 0, 0.12, 0.2, 'sine', f * 1.5);          // bubbly "bloop"
+      tone(f, 0.05, 0.22, 0.16, 'triangle');
+    }
+    function reveal() { tone(1568, 0, 0.18, 0.07); tone(2093, 0.06, 0.22, 0.05); }
+    function discovery() { [784, 988, 1175, 1568].forEach((f, i) => tone(f, i * 0.07, 0.25, 0.12, 'triangle')); }
+    function worldFirst() {
+      [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, i * 0.09, i === 4 ? 0.9 : 0.2, 0.2, 'triangle'));
+      tone(2093, 0.45, 0.8, 0.06);
+    }
+    const tick = () => tone(1200, 0, 0.05, 0.07, 'square');
+    // Gulp's signature sound: a long, wobbly cartoon BURP.
+    function burp() {
+      if (!ac) return;
+      const t = ac.currentTime;
+      const o = ac.createOscillator(); o.type = 'sawtooth';
+      o.frequency.setValueAtTime(110, t);
+      o.frequency.linearRampToValueAtTime(82, t + 0.5);
+      o.frequency.linearRampToValueAtTime(62, t + 1.0);
+      const am = ac.createGain(); am.gain.value = 0.6;
+      const lfo = ac.createOscillator(); lfo.frequency.value = 23;
+      const lg = ac.createGain(); lg.gain.value = 0.4;
+      lfo.connect(lg); lg.connect(am.gain);
+      const out = ac.createGain();
+      [[420, 5, 1], [900, 7, 0.5], [2300, 9, 0.12]].forEach(([fq, q, v]) => {
+        const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = fq; bp.Q.value = q;
+        const vg = ac.createGain(); vg.gain.value = v;
+        am.connect(bp); bp.connect(vg); vg.connect(out);
+      });
+      o.connect(am);
+      const g = ac.createGain(); out.connect(g); g.connect(master);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(2.2, t + 0.05);
+      g.gain.setValueAtTime(2.2, t + 0.75);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+      o.start(t); lfo.start(t); o.stop(t + 1.2); lfo.stop(t + 1.2);
+    }
+    function vanish() { [262, 330, 392, 523, 659, 784].forEach((f, i) => tone(f, i * 0.05, 1.2, 0.12, 'triangle')); }
+    function toggleMute() {
+      muted = !muted; saveJSON('merge_muted', muted ? 1 : 0);
+      if (master) master.gain.setTargetAtTime(muted ? 0 : 0.8, ac.currentTime, 0.02);
+    }
+    document.addEventListener('visibilitychange', () => { if (ac) { if (document.hidden) ac.suspend(); else ac.resume(); } });
+    return { init, drop, merge, reveal, discovery, worldFirst, tick, burp, vanish, toggleMute, isMuted: () => muted };
+  })();
+
+  // =====================================================================
+  // Game state
+  // =====================================================================
+  let bodies = [], particles = [], popups = [];
+  let state, score, roundMade, roundFirsts, bestMade, held, next, readyAt, aimX, lastRecipe, banner, shake;
+  let overAt = 0, firstDrop = true, idCounter = 0, warnT = 0, nextTick = 0, clock = 0;
+  const gulp = { look: { x: W / 2, y: 600 }, blinkAt: 2, blink: 0, wob: 0, wobV: 0, wow: 0 };
+
+  function newGame() {
+    bodies = []; particles = []; popups = [];
+    state = 'play'; score = 0; roundMade = 0; roundFirsts = 0; bestMade = null;
+    held = pickDrop(); next = pickDrop(); readyAt = 0; aimX = W / 2;
+    lastRecipe = null; banner = null; shake = 0; warnT = 0;
+  }
+  newGame();
+
+  function makeBody(x, y, t, item) {
+    return { id: ++idCounter, x, y, px: x, py: y, r: RADII[t], tr: RADII[t], t, item,
+             parents: null, overT: 0, born: clock, wob: 0, wobV: 0, spin: rand(0, 6) };
+  }
+
+  function dropHeld() {
+    if (state !== 'play' || !held || clock < readyAt) return;
+    const r = RADII[held.t];
+    const x = clamp(aimX, JAR_L + r + 1, JAR_R - r - 1);
+    const b = makeBody(x, DROP_Y, held.t, held.item);
+    b.wob = -0.25;
+    bodies.push(b);
+    gulp.wobV += 5;
+    Sound.drop();
+    firstDrop = false;
+    held = null;
+    readyAt = clock + DROP_COOLDOWN;
+  }
+
+  // Two same-size things touched: they fuse. The new thing appears at once as a "?" and
+  // is filled in when the answer arrives (instant for known recipes).
+  function fuse(a, b) {
+    a.dead = b.dead = true;
+    const t = a.t + 1;
+    const mx = (a.x * a.r * a.r + b.x * b.r * b.r) / (a.r * a.r + b.r * b.r);
+    const my = (a.y + b.y) / 2;
+    burst(mx, my, colorOf(a.item.n), 10 + a.t * 2, 160 + a.t * 25);
+    burst(mx, my, colorOf(b.item.n), 6 + a.t * 2, 140 + a.t * 25);
+    if (a.t >= 7) shake = Math.max(shake, 4 + a.t);
+    Sound.merge(t);
+    score += points(t);
+    popups.push({ x: mx, y: my - 20, text: '+' + points(t), t: 0, life: 0.9, size: 26 + a.t * 2, color: INK });
+
+    if (a.t === MAX_TIER) {
+      // Two of the biggest things: they explode into stardust for a huge bonus.
+      score += 200;
+      popups.push({ x: mx, y: my - 70, text: 'LEGENDARY +200', t: 0, life: 2, size: 40, color: '#ff4f7b' });
+      burst(mx, my, '#ffe066', 60, 600); burst(mx, my, '#ff8fa3', 40, 500);
+      shake = 18; Sound.vanish(); gulp.wow = 2;
+      return;
+    }
+    const nb = makeBody(mx, my, t, null);
+    nb.px = mx - ((a.x - a.px) + (b.x - b.px)) / 2;
+    nb.py = my - ((a.y - a.py) + (b.y - b.py)) / 2;
+    nb.r = Math.max(a.r, b.r);                     // grows smoothly to its new size
+    nb.parents = [a.item, b.item];
+    nb.wob = 0.35;
+    bodies.push(nb);
+    lastRecipe = { a: a.item, b: b.item, res: null, t };
+    const recipe = lastRecipe;
+    askCombo(a.item, b.item, t).then(res => {
+      nb.item = { n: res.n, e: res.e };
+      nb.wob = 0.4; nb.revealAt = clock;
+      recipe.res = nb.item;
+      onMade(nb, res);
+    });
+  }
+
+  function onMade(b, res) {
+    roundMade++;
+    if (!bestMade || b.t > bestMade.t) bestMade = { n: b.item.n, e: b.item.e, t: b.t };
+    const k = b.t + '|' + norm(res.n);
+    const isNew = !book[k];
+    if (isNew) { book[k] = { n: res.n, e: res.e, t: b.t, first: !!res.first }; saveJSON('merge_book', book); }
+    if (res.first) {
+      worldFirsts++; roundFirsts++; saveJSON('merge_firsts', worldFirsts);
+      banner = { kind: 'world', item: b.item, t: 0, life: 3.2 };
+      Sound.worldFirst(); gulp.wow = 2.2;
+      confetti(W / 2, 170, 70);
+    } else if (isNew && b.t >= 2) {
+      banner = { kind: 'new', item: b.item, t: 0, life: 1.8 };
+      Sound.discovery(); if (b.t >= 5) gulp.wow = 1.2;
+    } else Sound.reveal();
+    if (b.t >= 6) gulp.wow = Math.max(gulp.wow, 1.2);
+  }
+
+  function gameOver() {
+    state = 'burp'; overAt = clock;
+    Sound.burp(); shake = 16; gulp.wobV -= 30;
+    if (score > best) { best = score; saveJSON('merge_best', best); }
+    // Gulp burps everything out of the jar.
+    for (const b of bodies) {
+      const vx = (b.x - W / 2) * rand(1.2, 2.6) + rand(-200, 200);
+      const vy = -rand(1300, 2100) * (0.7 + 0.3 * (1 - b.y / H));
+      b.px = b.x - vx * STEP; b.py = b.y - vy * STEP;
+      b.spinV = rand(-8, 8);
+    }
+    burst(W / 2, JAR_TOP, '#ffffff', 40, 500);
+  }
+
+  // =====================================================================
+  // Physics (simple circles, Verlet integration, several small steps per frame)
+  // =====================================================================
+  function physicsStep(dt) {
+    const burping = state === 'burp';
+    const g = GRAVITY * dt * dt * (burping ? 0.55 : 1);
+    for (const b of bodies) {
+      const vx = (b.x - b.px) * 0.998, vy = (b.y - b.py) * 0.998;
+      b.px = b.x; b.py = b.y;
+      b.x += vx; b.y += vy + g;
+      if (b.r < b.tr) b.r = Math.min(b.tr, b.r + (b.tr - b.r) * 0.12 + 0.3);
+      if (burping) b.spin += (b.spinV || 0) * dt;
+    }
+    if (burping) return;          // flying out: no walls, no collisions
+    for (let it = 0; it < 3; it++) {
+      for (let i = 0; i < bodies.length; i++) {
+        const a = bodies[i]; if (a.dead) continue;
+        for (let j = i + 1; j < bodies.length; j++) {
+          const b = bodies[j]; if (b.dead) continue;
+          const dx = b.x - a.x, dy = b.y - a.y, min = a.r + b.r;
+          const d2 = dx * dx + dy * dy;
+          if (d2 >= min * min) continue;
+          if (a.t === b.t && a.item && b.item && a.r >= a.tr - 0.5 && b.r >= b.tr - 0.5) { fuse(a, b); break; }
+          const d = Math.sqrt(d2) || 0.001, nx = dx / d, ny = dy / d;
+          const over = (min - d);
+          const ma = a.r * a.r, mb = b.r * b.r, wa = mb / (ma + mb), wb = ma / (ma + mb);
+          a.x -= nx * over * wa; a.y -= ny * over * wa;
+          b.x += nx * over * wb; b.y += ny * over * wb;
+        }
+      }
+      for (const b of bodies) {
+        if (b.dead) continue;
+        if (b.x - b.r < JAR_L) { b.x = JAR_L + b.r; b.px = b.x; }
+        if (b.x + b.r > JAR_R) { b.x = JAR_R - b.r; b.px = b.x; }
+        if (b.y + b.r > FLOOR) {
+          b.y = FLOOR - b.r;
+          b.px = b.x - (b.x - b.px) * 0.86;   // floor friction
+          b.py = b.y;
+        }
+      }
+      bodies = bodies.filter(b => !b.dead);
+    }
+  }
+
+  // =====================================================================
+  // Effects
+  // =====================================================================
+  function burst(x, y, color, n, speed) {
+    for (let i = 0; i < n; i++) {
+      const a = rand(0, Math.PI * 2), s = rand(speed * 0.3, speed);
+      particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 60, r: rand(3, 7), color, t: 0, life: rand(0.35, 0.7), g: 700 });
+    }
+  }
+  function confetti(x, y, n) {
+    for (let i = 0; i < n; i++) {
+      particles.push({ x: x + rand(-120, 120), y, vx: rand(-300, 300), vy: rand(-650, -150), r: rand(4, 8),
+        color: PALETTE[i % PALETTE.length], t: 0, life: rand(1.2, 2.2), g: 650, rect: true, rot: rand(0, 6), rv: rand(-10, 10) });
+    }
+  }
+
+  // =====================================================================
+  // Input: touch/aim, lift to drop. One finger, nothing else.
+  // =====================================================================
+  const MUTE = { x: W - 38, y: 40, r: 26 };
+  let aiming = false;
+  function toLocal(e) {
+    const rect = canvas.getBoundingClientRect();
+    return { x: (e.clientX - rect.left) / scale, y: (e.clientY - rect.top) / scale };
+  }
+  canvas.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    Sound.init();
+    const p = toLocal(e);
+    if (Math.hypot(p.x - MUTE.x, p.y - MUTE.y) < MUTE.r + 8) { Sound.toggleMute(); return; }
+    if (state === 'over') { if (clock - overAt > 1.9) newGame(); return; }
+    if (state !== 'play') return;
+    aiming = true; aimX = p.x;
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  canvas.addEventListener('pointermove', e => {
+    const p = toLocal(e);
+    if (aiming || e.pointerType === 'mouse') aimX = p.x;
+  });
+  const lift = e => {
+    Sound.init();
+    if (!aiming) return;
+    aiming = false;
+    aimX = toLocal(e).x;
+    dropHeld();
+  };
+  canvas.addEventListener('pointerup', lift);
+  canvas.addEventListener('pointercancel', () => { aiming = false; });
+  const block = e => e.preventDefault();
+  canvas.addEventListener('touchstart', block, { passive: false });
+  canvas.addEventListener('touchmove', block, { passive: false });
+  window.addEventListener('contextmenu', block);
+  window.addEventListener('keydown', e => {
+    if (e.code === 'Space' || e.code === 'Enter') { Sound.init(); if (state === 'over' && clock - overAt > 1.9) newGame(); else dropHeld(); }
+    if (e.code === 'ArrowLeft') aimX -= 24;
+    if (e.code === 'ArrowRight') aimX += 24;
+  });
+
+  // =====================================================================
+  // Update
+  // =====================================================================
+  let acc = 0;
+  function update(dt) {
+    clock += dt;
+    const slow = state === 'burp' ? 0.6 : 1;
+    acc += dt * slow;
+    let steps = 0;
+    while (acc >= STEP && steps < 6) { physicsStep(STEP); acc -= STEP; steps++; }
+    if (steps === 6) acc = 0;
+
+    if (state === 'play') {
+      if (!held && clock >= readyAt) { held = next; next = pickDrop(); }
+      // Too full? Anything resting above the rim for too long makes Gulp burp.
+      let worst = 0;
+      for (const b of bodies) {
+        const settledAbove = b.y - b.r < JAR_TOP && clock - b.born > 1.0;
+        b.overT = settledAbove ? b.overT + dt : 0;
+        worst = Math.max(worst, b.overT);
+      }
+      warnT = worst;
+      if (worst > 0.25 && clock > nextTick) { Sound.tick(); nextTick = clock + Math.max(0.12, 0.5 - worst * 0.18); }
+      if (worst > OVER_LIMIT) gameOver();
+    } else if (state === 'burp' && clock - overAt > 1.5) {
+      state = 'over';
+      overAt = clock - 1.5;
+    }
+
+    for (const b of bodies) {          // squash-and-stretch wobble
+      b.wobV += (-b.wob * 260 - b.wobV * 14) * dt;
+      b.wob += b.wobV * dt;
+      if (!b.item) b.spin += dt * 3;
+    }
+    gulp.wobV += (-gulp.wob * 200 - gulp.wobV * 10) * dt;
+    gulp.wob += gulp.wobV * dt;
+    gulp.wow = Math.max(0, gulp.wow - dt);
+    if (clock > gulp.blinkAt) { gulp.blink = 0.14; gulp.blinkAt = clock + rand(2, 5); }
+    gulp.blink = Math.max(0, gulp.blink - dt);
+    // Gulp watches the newest falling thing, or the thing you are holding.
+    let target = { x: aimX, y: DROP_Y };
+    const last = bodies[bodies.length - 1];
+    if (last && clock - last.born < 0.8) target = last;
+    gulp.look.x += (target.x - gulp.look.x) * Math.min(1, dt * 10);
+    gulp.look.y += (target.y - gulp.look.y) * Math.min(1, dt * 10);
+
+    for (const p of particles) {
+      p.t += dt; p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= 0.99; if (p.rv) p.rot += p.rv * dt;
+    }
+    particles = particles.filter(p => p.t < p.life);
+    for (const p of popups) { p.t += dt; p.y -= 40 * dt; }
+    popups = popups.filter(p => p.t < p.life);
+    if (banner) { banner.t += dt; if (banner.t > banner.life) banner = null; }
+    if (lastRecipe && lastRecipe.res) lastRecipe.shownT = (lastRecipe.shownT || 0) + dt;
+    shake = Math.max(0, shake - dt * 30);
+  }
+
+  // =====================================================================
+  // Drawing
+  // =====================================================================
+  function text(str, x, y, size, color, weight = 700, align = 'center', font = FONT) {
+    ctx.font = `${weight} ${size}px ${font}`;
+    ctx.textAlign = align; ctx.textBaseline = 'middle';
+    ctx.fillStyle = color;
+    ctx.fillText(str, x, y);
+  }
+  function fitFont(str, maxW, size, weight = 700) {
+    ctx.font = `${weight} ${size}px ${FONT}`;
+    const w = ctx.measureText(str).width;
+    return w > maxW ? Math.max(8, size * maxW / w) : size;
+  }
+
+  // Each thing is a round sticker: flat color, thick ink outline, emoji, and its name.
+  function sprite(item, t) {
+    const key = t + '|' + item.n + '|' + item.e;
+    let s = sprites.get(key);
+    if (s) return s;
+    const r = RADII[t], pad = 6, k = scale * dpr;
+    const size = Math.ceil((r + pad) * 2 * k);
+    const c = document.createElement('canvas'); c.width = c.height = size;
+    const g = c.getContext('2d');
+    g.scale(k, k); g.translate(r + pad, r + pad);
+    // drop shadow
+    g.fillStyle = 'rgba(43,34,51,0.18)';
+    g.beginPath(); g.arc(0, 3, r, 0, Math.PI * 2); g.fill();
+    g.fillStyle = colorOf(item.n);
+    g.beginPath(); g.arc(0, 0, r, 0, Math.PI * 2); g.fill();
+    // soft shine
+    g.fillStyle = 'rgba(255,255,255,0.45)';
+    g.beginPath(); g.ellipse(-r * 0.38, -r * 0.42, r * 0.32, r * 0.17, -0.6, 0, Math.PI * 2); g.fill();
+    g.lineWidth = Math.max(3, r * 0.09); g.strokeStyle = INK;
+    g.beginPath(); g.arc(0, 0, r - g.lineWidth / 2, 0, Math.PI * 2); g.stroke();
+    const labeled = r >= 35;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = `${Math.round(r * (labeled ? 0.95 : 1.12))}px ${EMOJI_FONT}`;
+    g.fillStyle = '#000';
+    g.fillText(item.e, 0, labeled ? -r * 0.14 : r * 0.04);
+    if (labeled) {
+      let fs = Math.max(10, r * 0.26);
+      g.font = `700 ${fs}px ${FONT}`;
+      const w = g.measureText(item.n).width, maxW = r * 1.62;
+      if (w > maxW) { fs = Math.max(8, fs * maxW / w); g.font = `700 ${fs}px ${FONT}`; }
+      g.lineWidth = fs * 0.32; g.strokeStyle = 'rgba(255,255,255,0.9)'; g.lineJoin = 'round';
+      g.strokeText(item.n, 0, r * 0.56);
+      g.fillStyle = INK; g.fillText(item.n, 0, r * 0.56);
+    }
+    s = { c, half: r + pad };
+    sprites.set(key, s);
+    return s;
+  }
+
+  function drawBody(b) {
+    const sx = 1 + b.wob, sy = 1 - b.wob;
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    if (state === 'burp') ctx.rotate(b.spin);
+    ctx.scale(sx * b.r / b.tr, sy * b.r / b.tr);
+    if (b.item) {
+      const s = sprite(b.item, b.t);
+      ctx.drawImage(s.c, -s.half, -s.half, s.half * 2, s.half * 2);
+    } else drawMystery(b);
+    ctx.restore();
+  }
+  // Still "cooking": the two parents swirl inside a cloudy bubble.
+  function drawMystery(b) {
+    const r = b.tr;
+    ctx.fillStyle = 'rgba(43,34,51,0.18)';
+    ctx.beginPath(); ctx.arc(0, 3, r, 0, Math.PI * 2); ctx.fill();
+    const grd = ctx.createRadialGradient(-r * 0.3, -r * 0.3, r * 0.1, 0, 0, r);
+    grd.addColorStop(0, '#ffffff'); grd.addColorStop(1, '#e6dcff');
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+    ctx.lineWidth = Math.max(3, r * 0.09); ctx.strokeStyle = INK;
+    ctx.setLineDash([r * 0.3, r * 0.18]); ctx.lineDashOffset = -clock * 40;
+    ctx.beginPath(); ctx.arc(0, 0, r - ctx.lineWidth / 2, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    if (b.parents) {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `${Math.round(r * 0.55)}px ${EMOJI_FONT}`;
+      for (let i = 0; i < 2; i++) {
+        const a = b.spin + i * Math.PI;
+        ctx.fillText(b.parents[i].e, Math.cos(a) * r * 0.42, Math.sin(a) * r * 0.42);
+      }
+    }
+    text('?', 0, 2, r * 0.7, 'rgba(43,34,51,0.55)', 700);
+  }
+
+  // Gulp: a hungry glass jar. Its open top is its mouth; its eyes sit on the rim.
+  function jarPath() {
+    const L = JAR_L - 10, R = JAR_R + 10, B = FLOOR + 12, cr = 46;
+    ctx.beginPath();
+    ctx.moveTo(L, JAR_TOP - 6);
+    ctx.lineTo(L, B - cr);
+    ctx.quadraticCurveTo(L, B, L + cr, B);
+    ctx.lineTo(R - cr, B);
+    ctx.quadraticCurveTo(R, B, R, B - cr);
+    ctx.lineTo(R, JAR_TOP - 6);
+  }
+  function drawJarBack() {
+    // feet
+    ctx.fillStyle = INK;
+    ctx.beginPath(); ctx.ellipse(JAR_L + 70, FLOOR + 22, 42, 12, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(JAR_R - 70, FLOOR + 22, 42, 12, 0, 0, Math.PI * 2); ctx.fill();
+    // glass body
+    jarPath(); ctx.closePath();
+    ctx.fillStyle = 'rgba(214,240,255,0.55)';
+    ctx.fill();
+    // danger zone glow at the rim
+    if (warnT > 0.2 && state === 'play') {
+      const a = 0.25 + 0.25 * Math.sin(clock * 18);
+      ctx.fillStyle = `rgba(255,79,123,${a})`;
+      ctx.fillRect(JAR_L, JAR_TOP, JAR_R - JAR_L, 6);
+    }
+  }
+  function drawJarFront() {
+    const sq = gulp.wob * 0.04;
+    // glass outline
+    ctx.lineWidth = 9; ctx.strokeStyle = INK; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    jarPath(); ctx.stroke();
+    // glass shine stripes
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = 8;
+    ctx.beginPath(); ctx.moveTo(JAR_L + 8, JAR_TOP + 60); ctx.lineTo(JAR_L + 8, JAR_TOP + 230); ctx.stroke();
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(JAR_L + 8, JAR_TOP + 260); ctx.lineTo(JAR_L + 8, JAR_TOP + 300); ctx.stroke();
+    const lipY = JAR_TOP - 8 - sq * 60;
+    // danger line
+    ctx.save();
+    ctx.setLineDash([12, 10]);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = warnT > 0.2 && state === 'play' ? '#ff4f7b' : 'rgba(43,34,51,0.18)';
+    ctx.beginPath(); ctx.moveTo(JAR_L + 6, JAR_TOP); ctx.lineTo(JAR_R - 6, JAR_TOP); ctx.stroke();
+    ctx.restore();
+    drawFace(lipY);
+  }
+  function drawFace(lipY) {
+    const worried = warnT > 0.3 && state === 'play';
+    const burping = state !== 'play';
+    const wow = gulp.wow > 0;
+    const eyes = [{ x: JAR_L - 10, side: -1 }, { x: JAR_R + 10, side: 1 }];
+    const ey = lipY - 18;
+    for (const e of eyes) {
+      const er = burping ? 34 : wow ? 31 : 27;
+      // eye stalk
+      ctx.fillStyle = '#ffffff'; ctx.strokeStyle = INK; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.arc(e.x, ey, er, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      if (gulp.blink > 0 && !burping) {
+        ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(e.x - er * 0.7, ey); ctx.lineTo(e.x + er * 0.7, ey); ctx.stroke();
+      } else if (burping && clock - overAt < 0.9) {
+        // squeezed shut ">  <"
+        ctx.lineWidth = 6; ctx.beginPath();
+        ctx.moveTo(e.x - 12 * e.side, ey - 12); ctx.lineTo(e.x + 10 * e.side, ey); ctx.lineTo(e.x - 12 * e.side, ey + 12);
+        ctx.stroke();
+      } else {
+        const dx = gulp.look.x - e.x, dy = gulp.look.y - ey, d = Math.hypot(dx, dy) || 1;
+        const m = er - 13;
+        const pr = wow ? 15 : 11;
+        const px = e.x + dx / d * m, py = ey + dy / d * m;
+        ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(px - pr * 0.35, py - pr * 0.35, pr * 0.32, 0, Math.PI * 2); ctx.fill();
+        if (wow) {   // sparkle in the eyes
+          ctx.beginPath(); ctx.arc(px + pr * 0.3, py + pr * 0.3, pr * 0.16, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+      // eyebrow
+      ctx.strokeStyle = INK; ctx.lineWidth = 7; ctx.lineCap = 'round';
+      const by = ey - er - 12 - (wow ? 6 : 0);
+      const tilt = worried ? 10 : burping ? -6 : wow ? -4 : 0;
+      ctx.beginPath();
+      ctx.moveTo(e.x - 18 * e.side, by - tilt * 0.2);
+      ctx.lineTo(e.x + 18 * e.side, by + (worried ? -tilt : tilt));
+      ctx.stroke();
+      // cheek blush
+      ctx.fillStyle = 'rgba(255,120,150,0.45)';
+      ctx.beginPath(); ctx.ellipse(e.x - 24 * e.side, ey + 50, 16, 9, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    drawMouth(worried, burping, wow);
+    if (worried) {   // sweat drop
+      const sy = ey + 10 + ((clock * 60) % 40);
+      ctx.fillStyle = '#7cc4ff'; ctx.strokeStyle = INK; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(JAR_R + 46, sy - 14); ctx.quadraticCurveTo(JAR_R + 56, sy, JAR_R + 46, sy + 6);
+      ctx.quadraticCurveTo(JAR_R + 36, sy, JAR_R + 46, sy - 14); ctx.fill(); ctx.stroke();
+    }
+  }
+
+  // Gulp's little mouth, drawn on the glass just under the rim.
+  function drawMouth(worried, burping, wow) {
+    const mx = W / 2, my = JAR_TOP + 40 + gulp.wob * 0.6;
+    ctx.strokeStyle = INK; ctx.fillStyle = INK; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    const gulping = gulp.wobV > 2;
+    if (burping) {
+      ctx.beginPath(); ctx.ellipse(mx, my + 6, 46, 34, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ff8fa3'; ctx.beginPath(); ctx.ellipse(mx, my + 24, 26, 12, 0, 0, Math.PI * 2); ctx.fill();
+    } else if (wow || gulping) {
+      ctx.beginPath(); ctx.ellipse(mx, my, 13, 16, 0, 0, Math.PI * 2); ctx.fill();
+    } else if (worried) {
+      ctx.beginPath();
+      for (let i = 0; i <= 6; i++) { const x = mx - 30 + i * 10, y = my + (i % 2 ? -5 : 5); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+      ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.arc(mx, my - 14, 24, 0.25 * Math.PI, 0.75 * Math.PI); ctx.stroke();
+    }
+  }
+
+  function drawHeld() {
+    if (state !== 'play') return;
+    const item = held;
+    // aim guide
+    const r = item ? RADII[item.t] : 22;
+    const x = clamp(aimX, JAR_L + r + 1, JAR_R - r - 1);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(43,34,51,0.16)'; ctx.lineWidth = 3; ctx.setLineDash([4, 12]);
+    ctx.beginPath(); ctx.moveTo(x, DROP_Y + r + 4); ctx.lineTo(x, FLOOR); ctx.stroke();
+    ctx.restore();
+    if (!item) return;
+    const s = sprite(item.item, item.t);
+    const bob = Math.sin(clock * 4) * 3;
+    ctx.drawImage(s.c, x - s.half, DROP_Y - s.half + bob, s.half * 2, s.half * 2);
+  }
+
+  function drawHUD() {
+    // score
+    text(String(score), W / 2, 68, 64, INK, 700);
+    text('BEST ' + best, 24, 34, 20, 'rgba(43,34,51,0.6)', 700, 'left');
+    // next
+    text('NEXT', 24, 70, 15, 'rgba(43,34,51,0.55)', 700, 'left');
+    if (next) {
+      const s = sprite(next.item, next.t);
+      ctx.drawImage(s.c, 52 - 26, 106 - 26, 52, 52);
+    }
+    // discoveries
+    text('📖', W - 92, 96, 20, INK, 500, 'center', EMOJI_FONT);
+    text(String(discoveredCount()), W - 74, 97, 20, INK, 700, 'left');
+    if (worldFirsts > 0) {
+      text('🏆', W - 92, 126, 18, INK, 500, 'center', EMOJI_FONT);
+      text(String(worldFirsts), W - 74, 127, 20, INK, 700, 'left');
+    }
+    // mute
+    ctx.strokeStyle = INK; ctx.fillStyle = INK; ctx.lineWidth = 3;
+    const mx = MUTE.x, my = MUTE.y;
+    ctx.beginPath(); ctx.moveTo(mx - 12, my - 5); ctx.lineTo(mx - 5, my - 5); ctx.lineTo(mx + 3, my - 12);
+    ctx.lineTo(mx + 3, my + 12); ctx.lineTo(mx - 5, my + 5); ctx.lineTo(mx - 12, my + 5); ctx.closePath(); ctx.fill();
+    if (Sound.isMuted()) { ctx.beginPath(); ctx.moveTo(mx + 8, my - 7); ctx.lineTo(mx + 18, my + 7); ctx.moveTo(mx + 18, my - 7); ctx.lineTo(mx + 8, my + 7); ctx.stroke(); }
+    else { ctx.beginPath(); ctx.arc(mx + 4, my, 10, -0.8, 0.8); ctx.stroke(); }
+
+    // last recipe:  💧 Water + 🔥 Fire = ♨️ Steam
+    if (banner) drawBanner();
+    else if (lastRecipe) {
+      const R = lastRecipe;
+      const right = R.res ? R.res.e + ' ' + R.res.n : '…';
+      const str = `${R.a.e} ${R.a.n}  +  ${R.b.e} ${R.b.n}  =  ${right}`;
+      const fs = fitFont(str, W - 60, 22);
+      pill(W / 2, 162, Math.min(W - 40, measure(str, fs) + 36), 42, '#ffffff');
+      text(str, W / 2, 163, fs, INK, 700);
+    } else if (firstDrop) {
+      text('Same size things merge into something new', W / 2, 162, 20, 'rgba(43,34,51,0.7)', 500);
+    }
+
+    // size ladder at the bottom: how big have you gone?
+    const top = maxTierEver();
+    const y = 940, gap = 10, f = 18 / RADII[MAX_TIER];
+    const total = RADII.slice(1).reduce((sum, r) => sum + r * 2 * f, 0) + gap * (MAX_TIER - 1);
+    let x = (W - total) / 2;
+    for (let t = 1; t <= MAX_TIER; t++) {
+      const r = RADII[t] * f;
+      ctx.fillStyle = t <= top ? colorOf('tier' + t) : 'rgba(43,34,51,0.12)';
+      ctx.beginPath(); ctx.arc(x + r, y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = 2.5; ctx.strokeStyle = t <= top ? INK : 'rgba(43,34,51,0.25)'; ctx.stroke();
+      if (t > top) text('?', x + r, y + 1, r * 1.1, 'rgba(43,34,51,0.35)', 700);
+      x += r * 2 + gap;
+    }
+  }
+  function measure(str, fs, weight = 700) { ctx.font = `${weight} ${fs}px ${FONT}`; return ctx.measureText(str).width; }
+  function pill(cx, cy, w, h, fill, stroke = INK) {
+    ctx.fillStyle = 'rgba(43,34,51,0.18)';
+    rr(cx - w / 2, cy - h / 2 + 4, w, h, h / 2); ctx.fill();
+    ctx.fillStyle = fill; rr(cx - w / 2, cy - h / 2, w, h, h / 2); ctx.fill();
+    ctx.lineWidth = 4; ctx.strokeStyle = stroke; ctx.stroke();
+  }
+  function rr(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+  let maxTierCache = loadJSON('merge_maxtier', 1);
+  function maxTierEver() {
+    let m = maxTierCache;
+    for (const b of bodies) if (b.item && b.t > m) m = b.t;
+    if (m > maxTierCache) { maxTierCache = m; saveJSON('merge_maxtier', m); }
+    return m;
+  }
+
+  function drawBanner() {
+    const b = banner;
+    const inT = Math.min(1, b.t / 0.18), outT = Math.min(1, (b.life - b.t) / 0.25);
+    const k = Math.min(inT, outT);
+    const pop = 1 + Math.sin(Math.min(1, b.t / 0.3) * Math.PI) * 0.12;
+    ctx.save();
+    ctx.translate(W / 2, 168);
+    ctx.scale(k * pop, k * pop);
+    const world = b.kind === 'world';
+    const label = world ? 'FIRST IN THE WORLD!' : 'NEW DISCOVERY';
+    const str = b.item.e + ' ' + b.item.n;
+    const fs = fitFont(str, 380, 34);
+    const w = Math.max(measure(str, fs) + 70, 300);
+    ctx.translate(0, 0);
+    ctx.fillStyle = 'rgba(43,34,51,0.2)'; rr(-w / 2, -40 + 6, w, 84, 26); ctx.fill();
+    ctx.fillStyle = world ? '#ffe066' : '#ffffff'; rr(-w / 2, -40, w, 84, 26); ctx.fill();
+    ctx.lineWidth = 5; ctx.strokeStyle = INK; ctx.stroke();
+    // tag
+    const tw = measure(label, 16) + 26;
+    ctx.fillStyle = world ? '#ff4f7b' : INK; rr(-tw / 2, -54, tw, 28, 14); ctx.fill();
+    text(label, 0, -40, 16, '#ffffff', 700);
+    ctx.font = `700 ${fs}px ${FONT}`;
+    text(b.item.e, -measure(b.item.n, fs) / 2 - 6, 10, fs, '#000', 500, 'center', EMOJI_FONT);
+    text(b.item.n, 18, 11, fs, INK, 700);
+    ctx.restore();
+  }
+
+  function drawOverPanel() {
+    if (state !== 'over') return;
+    const t = clock - overAt;
+    const k = Math.min(1, (t - 1.5) / 0.25);
+    if (k <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = k;
+    ctx.fillStyle = 'rgba(243,233,216,0.72)'; ctx.fillRect(0, 0, W, H);
+    const cx = W / 2, top = 330;
+    ctx.translate(0, (1 - k) * 40);
+    ctx.fillStyle = 'rgba(43,34,51,0.2)'; rr(50, top + 8, W - 100, 400, 34); ctx.fill();
+    ctx.fillStyle = '#ffffff'; rr(50, top, W - 100, 400, 34); ctx.fill();
+    ctx.lineWidth = 5; ctx.strokeStyle = INK; ctx.stroke();
+    text('BURP!', cx, top + 52, 52, '#ff4f7b', 700);
+    text('Gulp is too full', cx, top + 96, 20, 'rgba(43,34,51,0.65)', 500);
+    text(String(score), cx, top + 160, 76, INK, 700);
+    const isBest = score >= best && score > 0;
+    text(isBest ? 'NEW BEST!' : 'BEST ' + best, cx, top + 212, 22, isBest ? '#ff4f7b' : 'rgba(43,34,51,0.6)', 700);
+    if (bestMade) {
+      text('Biggest thing you made', cx, top + 254, 17, 'rgba(43,34,51,0.6)', 500);
+      const str = bestMade.n;
+      const fs = fitFont(str, 300, 28);
+      const w = measure(str, fs);
+      text(bestMade.e, cx - w / 2 - 6, top + 290, 30, '#000', 500, 'center', EMOJI_FONT);
+      text(str, cx + 18, top + 291, fs, INK, 700);
+    }
+    const disc = roundFirsts > 0 ? `🏆 ${roundFirsts} world first${roundFirsts > 1 ? 's' : ''}` : `📖 ${discoveredCount()} things discovered`;
+    text(disc, cx, top + 336, 19, INK, 500, 'center', `${FONT}, ${EMOJI_FONT}`);
+    if (t > 1.9) {
+      const p = 1 + Math.sin(clock * 5) * 0.04;
+      ctx.save(); ctx.translate(cx, top + 470); ctx.scale(p, p);
+      pill(0, 0, 300, 64, '#ffe066');
+      text('TAP TO PLAY AGAIN', 0, 1, 24, INK, 700);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  function drawIntro() {
+    if (!firstDrop || state !== 'play') return;
+    const a = 0.85 + Math.sin(clock * 3) * 0.15;
+    ctx.save(); ctx.globalAlpha = a;
+    text('MERGE', W / 2, 500, 72, INK, 700);
+    text('ANYTHING', W / 2, 566, 72, INK, 700);
+    ctx.restore();
+    text('Touch, slide, let go to drop', W / 2, 640, 22, 'rgba(43,34,51,0.75)', 500);
+    text('Can you make something', W / 2, 720, 22, INK, 700);
+    text('nobody in the world has made?', W / 2, 750, 22, INK, 700);
+  }
+
+  function draw() {
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    ctx.fillStyle = '#f3e9d8'; ctx.fillRect(0, 0, W, H);
+    // paper dots
+    ctx.fillStyle = 'rgba(43,34,51,0.05)';
+    for (let y = 20; y < H; y += 34) for (let x = (y / 34) % 2 ? 20 : 37; x < W; x += 34) { ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI * 2); ctx.fill(); }
+    if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+
+    drawJarBack();
+    drawIntro();
+    for (const b of bodies) drawBody(b);
+    drawJarFront();
+    drawHeld();
+    for (const p of particles) {
+      ctx.globalAlpha = Math.max(0, 1 - p.t / p.life);
+      ctx.fillStyle = p.color;
+      if (p.rect) {
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.fillRect(-p.r, -p.r / 2, p.r * 2, p.r); ctx.restore();
+      } else { ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill(); }
+    }
+    ctx.globalAlpha = 1;
+    for (const p of popups) {
+      ctx.globalAlpha = Math.max(0, 1 - p.t / p.life);
+      ctx.font = `700 ${p.size}px ${FONT}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 6; ctx.strokeStyle = '#fff'; ctx.lineJoin = 'round';
+      ctx.strokeText(p.text, p.x, p.y); ctx.fillStyle = p.color; ctx.fillText(p.text, p.x, p.y);
+    }
+    ctx.globalAlpha = 1;
+    if (state === 'burp' && clock - overAt < 1.4) {
+      const t = clock - overAt;
+      ctx.save(); ctx.translate(W / 2, 470); ctx.rotate(-0.08); const s = 0.6 + Math.min(1, t * 4) * 0.6; ctx.scale(s, s);
+      ctx.font = `700 110px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 14; ctx.strokeStyle = INK; ctx.lineJoin = 'round'; ctx.strokeText('BURP!', 0, 0);
+      ctx.fillStyle = '#ffe066'; ctx.fillText('BURP!', 0, 0);
+      ctx.restore();
+    }
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    drawHUD();
+    drawOverPanel();
+  }
+
+  // =====================================================================
+  // Main loop
+  // =====================================================================
+  let lastT = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - lastT) / 1000);
+    lastT = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // Small hook for automated checks.
+  window.__merge = { get bodies() { return bodies; }, get state() { return state; }, get score() { return score; },
+    drop(x) { aimX = x; dropHeld(); }, book: BOOK, RADII, DROP_ODDS,
+    // Plays a round with random drops as fast as possible; returns how it went.
+    async sim(maxDrops = 400) {
+      newGame(); firstDrop = false; let drops = 0, time = 0;
+      while (state === 'play' && drops < maxDrops) {
+        if (held && clock >= readyAt) { aimX = rand(JAR_L, JAR_R); dropHeld(); drops++; }
+        update(1 / 60); time += 1 / 60; await null;
+      }
+      let top = 0; for (const b of bodies) top = Math.max(top, b.t);
+      return { drops, time: Math.round(time), score, top };
+    } };
+})();
+</script>
