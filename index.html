@@ -345,6 +345,14 @@
     return { start, stop, tick, clipFor, supported };
   })();
 
+  // Inside claude.ai the page saves files through the viewer's downloads capability.
+  let claudeDownloads = null;
+  try {
+    if (window.claude && window.claude.use) {
+      window.claude.use('downloads').then(d => { claudeDownloads = d; }).catch(() => {});
+    }
+  } catch (e) {}
+
   let pendingShare = false;
   let toast = { msg: '', until: 0 };
   const SHARE_BTN = { x: W / 2, y: 790, w: 310, h: 68 };
@@ -366,6 +374,12 @@
     const msg = s.result !== null
       ? `I stopped ${fmt(s.result)} from the edge! Can you get closer?`
       : `My car flew off the cliff 😂 Can you stop closer to the edge?`;
+    if (claudeDownloads) {
+      claudeDownloads.save({ filename: file.name, data: blob })
+        .then(() => showToast('Video saved!'))
+        .catch(err => { if (!err || err.code !== 'declined') showToast('Could not save the video'); });
+      return;
+    }
     if (navigator.canShare && navigator.share) {
       let ok = false;
       try { ok = navigator.canShare({ files: [file] }); } catch (e) {}
