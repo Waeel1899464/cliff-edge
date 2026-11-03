@@ -73,7 +73,8 @@
   function resize() {
     const vw = document.body.clientWidth, vh = document.body.clientHeight;
     scale = Math.min(vw / W, vh / H);
-    dpr = Math.min(window.devicePixelRatio || 1, 3);
+    // Cap the drawing size at 1080x1920 (TikTok's standard): sharp, but light for phones and clip recording.
+    dpr = Math.min(window.devicePixelRatio || 1, 1080 / (W * scale));
     canvas.style.width = (W * scale) + 'px';
     canvas.style.height = (H * scale) + 'px';
     canvas.width = Math.round(W * scale * dpr);
@@ -95,10 +96,12 @@
   let particles = [];
   let shake = 0;
 
+  let roundCounter = 0;
   function newRound() {
     const surface = SURFACES[Math.floor(Math.random() * SURFACES.length)];
     const dist = 8 + Math.random() * 5;              // meters from car front to edge
     s = {
+      id: ++roundCounter,
       state: 'ready',
       surface,
       vmax: 6 + Math.random() * 3,
@@ -123,11 +126,13 @@
     const rect = canvas.getBoundingClientRect();
     const lx = (e.clientX - rect.left) / scale, ly = (e.clientY - rect.top) / scale;
     if (Math.hypot(lx - MUTE_X, ly - MUTE_Y) < 34) { Sound.toggleMute(); return; }
+    if (shareVisible() && inShareBtn(lx, ly)) { pendingShare = true; return; }
     const now = performance.now();
     if (s.state === 'ready') {
       activePointer = e.pointerId;
       try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
       s.state = 'holding';
+      Rec.start(s.id);
       return;
     }
     if ((s.state === 'stopped' || s.state === 'fell' || s.state === 'falling') && now - s.endAt > 300) {
@@ -135,6 +140,8 @@
     }
   }
   function release(e) {
+    Sound.init();   // phones only unlock audio on a finger lift
+    if (pendingShare) { pendingShare = false; doShare(); return; }
     if (activePointer !== null && e.pointerId !== activePointer) return;
     activePointer = null;
     if (s.state === 'holding') s.state = 'sliding';
@@ -155,6 +162,7 @@
     let ac = null, master = null, noiseBuf = null;
     let eng = null, skid = null;
     let muted = load('cliff_muted', 0) === 1;
+    let compNode = null, recDest = null;
 
     function init() {
       if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
@@ -168,6 +176,7 @@
       comp.threshold.value = -10; comp.knee.value = 6; comp.ratio.value = 12;
       comp.attack.value = 0.003; comp.release.value = 0.15;
       master.connect(comp); comp.connect(ac.destination);
+      compNode = comp;
 
       noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
       const d = noiseBuf.getChannelData(0);
@@ -283,8 +292,98 @@
       if (document.hidden) ac.suspend(); else ac.resume();
     });
 
-    return { init, update, scream, splash, ding, bloop, fanfare, pop, toggleMute, isMuted: () => muted };
+    // Audio track for clip recording (game sounds go into the video).
+    function streamTrack() {
+      if (!ac || !compNode || !ac.createMediaStreamDestination) return null;
+      if (!recDest) { recDest = ac.createMediaStreamDestination(); compNode.connect(recDest); }
+      return recDest.stream.getAudioTracks()[0] || null;
+    }
+
+    return { init, update, scream, splash, ding, bloop, fanfare, pop, toggleMute, streamTrack, isMuted: () => muted };
   })();
+
+  // ---------- Clip recorder: each round is recorded as a vertical video ----------
+  const Rec = (() => {
+    let stream = null, rec = null, chunks = [], startedAt = 0;
+    let clip = null, clipRound = -1, recRound = -1;
+    const MAX_MS = 12000;
+    function supported() { return !!(window.MediaRecorder && canvas.captureStream); }
+    function pickMime() {
+      // WebM first (Chrome/Android always encode it; TikTok accepts it). MP4 for iPhone Safari, which has no WebM recording.
+      const list = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4;codecs=avc1', 'video/mp4'];
+      return list.find(m => { try { return MediaRecorder.isTypeSupported(m); } catch (e) { return false; } }) || '';
+    }
+    function start(roundId) {
+      if (!supported()) return;
+      stop();
+      try {
+        if (!stream) stream = canvas.captureStream(30);
+        if (stream.getAudioTracks().length === 0) { const a = Sound.streamTrack(); if (a) stream.addTrack(a); }
+        const mime = pickMime();
+        const r = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 5000000 } : undefined);
+        const myChunks = [];
+        const myRound = roundId;
+        r.ondataavailable = e => { if (e.data && e.data.size) myChunks.push(e.data); };
+        r.onstop = () => {
+          if (!myChunks.length) return;
+          clip = new Blob(myChunks, { type: r.mimeType || mime || 'video/webm' });
+          clipRound = myRound;
+        };
+        r.start(250);
+        rec = r; recRound = roundId; startedAt = performance.now();
+      } catch (e) { rec = null; }
+    }
+    function stop() { if (rec && rec.state !== 'inactive') { try { rec.stop(); } catch (e) {} } rec = null; }
+    function tick(st) {
+      if (!rec) return;
+      const now = performance.now();
+      if (now - startedAt > MAX_MS) stop();
+      else if (st.state === 'stopped' && now - st.endAt > 1500) stop();
+      else if (st.state === 'fell') stop();
+    }
+    function clipFor(roundId) { return clipRound === roundId ? clip : null; }
+    return { start, stop, tick, clipFor, supported };
+  })();
+
+  let pendingShare = false;
+  let toast = { msg: '', until: 0 };
+  const SHARE_BTN = { x: W / 2, y: 790, w: 310, h: 68 };
+  function shareVisible() {
+    return (s.state === 'stopped' || s.state === 'fell') && !!Rec.clipFor(s.id);
+  }
+  function inShareBtn(lx, ly) {
+    return Math.abs(lx - SHARE_BTN.x) < SHARE_BTN.w / 2 && Math.abs(ly - SHARE_BTN.y) < SHARE_BTN.h / 2;
+  }
+  function showToast(msg) { toast = { msg, until: performance.now() + 2600 }; }
+
+  // Must run inside a tap (pointerup) so phones allow the share sheet.
+  function doShare() {
+    const blob = Rec.clipFor(s.id);
+    if (!blob) return;
+    const ext = blob.type.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
+    const label = s.result !== null ? s.result.toFixed(1).replace('.', '_') + 'cm' : 'fall';
+    const file = new File([blob], `cliff-edge-${label}.${ext}`, { type: blob.type });
+    const msg = s.result !== null
+      ? `I stopped ${fmt(s.result)} from the edge! Can you get closer?`
+      : `My car flew off the cliff 😂 Can you stop closer to the edge?`;
+    if (navigator.canShare && navigator.share) {
+      let ok = false;
+      try { ok = navigator.canShare({ files: [file] }); } catch (e) {}
+      if (ok) {
+        navigator.share({ files: [file], title: 'Cliff Edge', text: msg }).catch(() => {});
+        return;
+      }
+    }
+    // Fallback: save the video file.
+    try {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = file.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+    } catch (e) {}
+    showToast(window.top !== window ? 'Sharing works on the public link' : 'Video saved!');
+  }
 
   // ---------- Helpers ----------
   const edgeM = EDGE_X / PPM;
@@ -608,6 +707,24 @@
     ctx.restore();
   }
 
+  function drawShareBtn() {
+    const b = SHARE_BTN;
+    const pulse = 1 + Math.sin(performance.now() / 220) * 0.03;
+    ctx.save();
+    ctx.translate(b.x, b.y); ctx.scale(pulse, pulse);
+    ctx.fillStyle = 'rgba(10,10,25,0.45)';
+    ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2 + 5, b.w, b.h, 34); ctx.fill();
+    ctx.fillStyle = '#ffd23f';
+    ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, 34); ctx.fill();
+    // play triangle icon
+    ctx.fillStyle = '#12141f';
+    ctx.beginPath(); ctx.moveTo(-112, -12); ctx.lineTo(-112, 12); ctx.lineTo(-92, 0); ctx.closePath(); ctx.fill();
+    ctx.font = '900 28px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('SHARE CLIP', 14, 1);
+    ctx.restore();
+  }
+
   function drawMuteIcon() {
     ctx.save();
     ctx.translate(MUTE_X, MUTE_Y);
@@ -720,6 +837,12 @@
       text(s.fallMsg, W / 2, 340, 64, '#ffffff');
       text('TAP TO TRY AGAIN', W / 2, 900, 28, '#ffffff', 700);
     }
+    if (shareVisible()) drawShareBtn();
+    if (performance.now() < toast.until) {
+      ctx.fillStyle = 'rgba(10,10,25,0.8)';
+      ctx.beginPath(); ctx.roundRect(W / 2 - 220, 690, 440, 50, 25); ctx.fill();
+      text(toast.msg, W / 2, 715, 22, '#ffffff', 700);
+    }
   }
 
   // ---------- Loop ----------
@@ -729,6 +852,7 @@
     last = now;
     update(dt);
     Sound.update(s);
+    Rec.tick(s);
     draw();
     requestAnimationFrame(frame);
   }
