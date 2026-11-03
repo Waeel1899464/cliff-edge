@@ -175,7 +175,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     const q = new URLSearchParams(location.search);
     const c = (q.get('c') || '').split('-').map(Number);
     const sc = q.get('s');
-    if (c.length === 3 && c.every(Number.isInteger)) {
+    if (!IS_PORTAL && c.length === 3 && c.every(Number.isInteger)) {   // platform build: no external challenge links
       const si = c[0], dist = c[1] / 1000, vmax = c[2] / 1000;
       const score = sc === 'x' ? null : Number(sc) / 10;
       const okRound = si >= 0 && si < SURFACES.length && dist >= 8 && dist <= 13 && vmax >= 6 && vmax <= 9;
@@ -241,7 +241,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   const Track = (() => {
     const URL_ = 'https://twgbgjwweanifxngkzrd.supabase.co/rest/v1/events';
     const KEY = 'sb_publishable_fRMxd1l7QJ0Rj5Tvysw1jg_I60GWXjT';
-    const on = location.hostname === 'waeel1899464.github.io' || /[?&]track=1/.test(location.search);
+    const on = !IS_PORTAL && (location.hostname === 'waeel1899464.github.io' || /[?&]track=1/.test(location.search));
     const rid = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
     let device = null;
     try { device = localStorage.getItem('cliff_dev'); if (!device) { device = rid(); localStorage.setItem('cliff_dev', device); } } catch (e) {}
@@ -309,7 +309,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     const rect = canvas.getBoundingClientRect();
     const lx = (e.clientX - rect.left) / scale, ly = (e.clientY - rect.top) / scale;
     if (Math.hypot(lx - MUTE_X, ly - MUTE_Y) < 34) { Sound.toggleMute(); return; }
-    if (roundEnded() && inBtn(CHALLENGE_BTN, lx, ly)) { pendingChallenge = true; return; }
+    if (challengeVisible() && inBtn(CHALLENGE_BTN, lx, ly)) { pendingChallenge = true; return; }
     if (shareVisible() && inShareBtn(lx, ly)) { pendingShare = true; return; }
     if (pillVisible() && inBtn(DAILY_PILL, lx, ly + 0)) { toggleDaily(); return; }
     const now = performance.now();
@@ -513,7 +513,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       if (!copying) return;
       try { recCtx.drawImage(canvas, 0, 0, recCanvas.width, recCanvas.height); } catch (e) {}
     }
-    function supported() { return !!(window.MediaRecorder && recCanvas.captureStream); }
+    // Platform build: clips are off (sharing and downloads are usually blocked inside platform iframes).
+    function supported() { return !IS_PORTAL && !!(window.MediaRecorder && recCanvas.captureStream); }
     // MP4 plays everywhere (WhatsApp, Messenger, TikTok). Some browsers claim MP4 but write a file
     // with no picture, so MP4 is used only after a half-second test recording proves it has video.
     // Until then (or if the test fails) WebM is used.
@@ -615,7 +616,9 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   const SHARE_BTN = { x: W / 2, y: 702, w: 270, h: 56 };
   const CHALLENGE_BTN = { x: W / 2, y: 784, w: 360, h: 70 };
   let pendingChallenge = false;
+  function challengeVisible() { return !IS_PORTAL && roundEnded(); }
   function shareVisible() {
+    if (IS_PORTAL) return false;
     const ended = s.state === 'stopped' || s.state === 'fell' || (s.state === 'falling' && s.splashed);
     return ended && (!!Rec.clipFor(s.id) || Rec.recordingFor(s.id));
   }
@@ -1369,8 +1372,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     drawMuteIcon();
     if (pillVisible()) drawDailyPill();
 
-    // Game link on the end screens; every recorded clip ends on one, so clips carry it.
-    if (roundEnded()) {
+    // Game link on the end screens; every recorded clip ends on one, so clips carry it. Web build only.
+    if (!IS_PORTAL && roundEnded()) {
     ctx.font = '700 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgba(10,10,25,0.45)';
@@ -1430,7 +1433,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       text(endHint(`TAP TO RETRY CLIFF ${cliff}`, 'TAP TO TRY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
     }
     if (shareVisible()) drawShareBtn();
-    if (roundEnded()) drawChallengeBtn();
+    if (challengeVisible()) drawChallengeBtn();
     if (performance.now() < toast.until) {
       ctx.fillStyle = 'rgba(10,10,25,0.8)';
       const lines = toast.msg.split('\n');
