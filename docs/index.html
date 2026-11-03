@@ -325,6 +325,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   // ---------- Clip recorder: each round is recorded as a vertical video ----------
   const Rec = (() => {
     let stream = null, rec = null, chunks = [], startedAt = 0;
+    let onReady = null;   // waiting share request, run when the clip is finished
     let clip = null, clipRound = -1, recRound = -1;
     const MAX_MS = 12000;
     function supported() { return !!(window.MediaRecorder && canvas.captureStream); }
@@ -336,6 +337,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     function start(roundId) {
       if (!supported()) return;
       stop();
+      onReady = null;
       try {
         if (!stream) stream = canvas.captureStream(30);
         if (stream.getAudioTracks().length === 0) { const a = Sound.streamTrack(); if (a) stream.addTrack(a); }
@@ -346,8 +348,11 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
         r.ondataavailable = e => { if (e.data && e.data.size) myChunks.push(e.data); };
         r.onstop = () => {
           if (!myChunks.length) return;
-          clip = new Blob(myChunks, { type: r.mimeType || mime || 'video/webm' });
+          // Plain type without codec details: phones reject 'video/webm;codecs=...' for sharing.
+          const raw = r.mimeType || mime || 'video/webm';
+          clip = new Blob(myChunks, { type: raw.indexOf('mp4') >= 0 ? 'video/mp4' : 'video/webm' });
           clipRound = myRound;
+          if (onReady) { const f = onReady; onReady = null; f(clip); }
         };
         r.start(250);
         rec = r; recRound = roundId; startedAt = performance.now();
@@ -358,11 +363,17 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       if (!rec) return;
       const now = performance.now();
       if (now - startedAt > MAX_MS) stop();
-      else if (st.state === 'stopped' && now - st.endAt > 1500) stop();
+      else if (st.state === 'stopped' && now - st.endAt > 1200) stop();
       else if (st.state === 'fell') stop();
     }
     function clipFor(roundId) { return clipRound === roundId ? clip : null; }
-    return { start, stop, tick, clipFor, supported };
+    function recordingFor(roundId) { return !!rec && recRound === roundId; }
+    // Get this round's clip now: finish the recording early if it is still running.
+    function finish(roundId, cb) {
+      if (clipRound === roundId && clip) { cb(clip); return; }
+      if (recordingFor(roundId)) { onReady = cb; stop(); }
+    }
+    return { start, stop, tick, clipFor, recordingFor, finish, supported };
   })();
 
   // Inside claude.ai the page saves files through the viewer's downloads capability.
@@ -377,7 +388,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   let toast = { msg: '', until: 0 };
   const SHARE_BTN = { x: W / 2, y: 790, w: 310, h: 68 };
   function shareVisible() {
-    return (s.state === 'stopped' || s.state === 'fell') && !!Rec.clipFor(s.id);
+    const ended = s.state === 'stopped' || s.state === 'fell' || (s.state === 'falling' && s.splashed);
+    return ended && (!!Rec.clipFor(s.id) || Rec.recordingFor(s.id));
   }
   function inShareBtn(lx, ly) {
     return Math.abs(lx - SHARE_BTN.x) < SHARE_BTN.w / 2 && Math.abs(ly - SHARE_BTN.y) < SHARE_BTN.h / 2;
@@ -385,18 +397,22 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function showToast(msg) { toast = { msg, until: performance.now() + 2600 }; }
 
   // Must run inside a tap (pointerup) so phones allow the share sheet.
+  const GAME_URL = 'https://waeel1899464.github.io/cliff-edge/';
   function doShare() {
-    const blob = Rec.clipFor(s.id);
-    if (!blob) return;
+    const round = s;
+    Rec.finish(round.id, blob => shareClip(blob, round));
+  }
+  function shareClip(blob, round) {
+    const s = round;
     const ext = blob.type.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
     const label = s.result !== null ? s.result.toFixed(1).replace('.', '_') + 'cm' : 'fall';
     const file = new File([blob], `cliff-edge-${label}.${ext}`, { type: blob.type });
     const msg = s.result !== null
-      ? `I stopped ${fmt(s.result)} from the edge! Can you get closer?`
-      : `My car flew off the cliff 😂 Can you stop closer to the edge?`;
+      ? `I stopped ${fmt(s.result)} from the edge! Can you get closer? ${GAME_URL}`
+      : `My car flew off the cliff 😂 Can you stop closer to the edge? ${GAME_URL}`;
     if (claudeDownloads) {
       claudeDownloads.save({ filename: file.name, data: blob })
-        .then(() => showToast('Video saved!'))
+        .then(() => showToast('Saved! Sharing opens on the public link'))
         .catch(err => { if (!err || err.code !== 'declined') showToast('Could not save the video'); });
       return;
     }
@@ -874,8 +890,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (shareVisible()) drawShareBtn();
     if (performance.now() < toast.until) {
       ctx.fillStyle = 'rgba(10,10,25,0.8)';
-      ctx.beginPath(); ctx.roundRect(W / 2 - 220, 690, 440, 50, 25); ctx.fill();
-      text(toast.msg, W / 2, 715, 22, '#ffffff', 700);
+      ctx.beginPath(); ctx.roundRect(W / 2 - 255, 690, 510, 50, 25); ctx.fill();
+      text(toast.msg, W / 2, 715, 20, '#ffffff', 700);
     }
   }
 
