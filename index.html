@@ -49,6 +49,12 @@
     { name: 'MUD',  base: 4.0, drag: 1.8,  top: '#8a5a33', side: '#5e3b1f', dust: '#a8774a' },
   ];
 
+  // Character looks. Only one for now; later these become cosmetic items (never affect score).
+  const SKINS = [
+    { id: 'pinky', name: 'Pinky', body: '#ff4f7b', shade: '#d93a64', roof: '#ffd23f', ball: '#7ef9ff' },
+  ];
+  let skin = SKINS[0];
+
   // Challenge ladder. Percentages are first guesses; replace with real player data after testing.
   const CHALLENGES = [
     { cm: 100, fail: '50%' },
@@ -99,6 +105,7 @@
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
       v: 0, a: 0,
       tilt: 0, tiltV: 0,                              // body pitch (spring)
+      eyeX: 1.5, eyeV: 0, eyeY: 0, eyeYV: 0, ant: 0, antV: 0, sq: 0, sqV: 0,
       result: null, newBest: false, beat: false,
       endAt: 0,
       parts: null, fallT: 0, splashed: false, fallMsg: '',
@@ -412,6 +419,18 @@
     s.tiltV += ((targetTilt - s.tilt) * 120 - s.tiltV * 9) * dt;
     s.tilt += s.tiltV * dt;
 
+    // Character springs: googly pupil lags behind motion, antenna wobbles, body squashes.
+    const moving = s.state === 'holding' || s.state === 'sliding';
+    const ax = moving ? -s.a : 0;
+    const eyeTX = moving ? Math.max(-6, Math.min(6, ax * 0.7 + 2)) : (s.state === 'stopped' ? 3 : 1.5);
+    const eyeTY = s.state === 'stopped' && edgeM - frontX() < 1 ? 3 : 0;
+    s.eyeV += ((eyeTX - s.eyeX) * 260 - s.eyeV * 11) * dt; s.eyeX += s.eyeV * dt;
+    s.eyeYV += ((eyeTY - s.eyeY) * 260 - s.eyeYV * 11) * dt; s.eyeY += s.eyeYV * dt;
+    if (s.parts) s.antV += rand(-60, 60) * dt * 10;
+    s.antV += ((Math.max(-0.9, Math.min(0.9, ax * 0.07)) - s.ant) * 90 - s.antV * 3.5) * dt; s.ant += s.antV * dt;
+    const sqT = moving ? Math.max(-0.12, Math.min(0.12, s.a * 0.012)) : 0;
+    s.sqV += ((sqT - s.sq) * 160 - s.sqV * 8) * dt; s.sq += s.sqV * dt;
+
     // Particles
     for (const p of particles) {
       p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt;
@@ -430,7 +449,7 @@
     } else if (s.state === 'sliding' || s.state === 'stopped') {
       const d = edgeM - frontX();
       const near = Math.max(0, Math.min(1, 1 - d / 3));
-      zt = 1 + 2.4 * near * near;
+      zt = 1 + 2.0 * near * near;
       const focus = (frontX() * PPM + EDGE_X) / 2;
       ft = CAM_ANCHOR_X + (focus - CAM_ANCHOR_X) * near;
     }
@@ -469,44 +488,115 @@
   }
 
   // Body centered on (0,0). mood: 'calm' | 'scared' | 'scream' | 'happy'
+  // The character: a jelly-bean car with one big googly eye and a wobbly antenna.
+  // mood: 'calm' | 'determined' | 'scared' | 'happy' | 'scream'
   function drawBody(braking, mood) {
     const len = CAR_LEN * PPM, h = CAR_H;
-    ctx.fillStyle = '#ff4f7b';
-    ctx.beginPath(); ctx.roundRect(-len / 2, -h / 2, len, h, 8); ctx.fill();
-    ctx.fillStyle = '#ffd23f';
-    ctx.beginPath(); ctx.roundRect(-len / 2 + 6, -h / 2 - 16, len * 0.5, 18, 6); ctx.fill();
+    const sq = s.sq || 0;
+    ctx.save();
+    ctx.scale(1 + sq, 1 - sq);
+
+    // antenna (springy) with a glowing ball
+    ctx.save();
+    ctx.translate(-8, -h / 2 - 14);
+    ctx.rotate(s.ant || 0);
+    ctx.strokeStyle = '#2b2d42'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -16); ctx.stroke();
+    ctx.fillStyle = skin.ball;
+    ctx.beginPath(); ctx.arc(0, -18, 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.beginPath(); ctx.arc(-1.5, -19.5, 1.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // roof dome
+    ctx.fillStyle = skin.roof;
+    ctx.beginPath(); ctx.roundRect(-len / 2 + 5, -h / 2 - 15, len * 0.52, 20, [10, 10, 2, 2]); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.beginPath(); ctx.roundRect(-len / 2 + 9, -h / 2 - 12, 6, 9, 3); ctx.fill();
+
+    // body: bean shape with a darker belly
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(-len / 2, -h / 2, len, h, 12);
+    ctx.fillStyle = skin.body; ctx.fill();
+    ctx.clip();
+    ctx.fillStyle = skin.shade;
+    ctx.fillRect(-len / 2, h / 2 - 7, len, 7);
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.fillRect(-len / 2 + 6, -h / 2 + 3, len * 0.35, 3);
+    ctx.restore();
+
+    // brake light
     ctx.fillStyle = braking ? '#ff1f3d' : '#7a2236';
     if (braking) { ctx.shadowColor = '#ff1f3d'; ctx.shadowBlur = 14; }
-    ctx.beginPath(); ctx.roundRect(-len / 2 - 2, -h / 2 + 4, 5, 8, 2); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(-len / 2 - 2, -h / 2 + 5, 5, 8, 2); ctx.fill();
     ctx.shadowBlur = 0;
 
-    const ex = len / 2 - 10, ey = -3;
+    // cheek
+    ctx.fillStyle = 'rgba(255,150,170,0.75)';
+    ctx.beginPath(); ctx.ellipse(4, 6, 4.5, 3, 0, 0, Math.PI * 2); ctx.fill();
+
+    // eye
+    const ex = 13, ey = -4;
+    const er = mood === 'scream' ? 12.5 : mood === 'scared' ? 11.5 : 10;
+    ctx.lineWidth = 2; ctx.strokeStyle = '#2b2d42';
     if (mood === 'happy') {
-      ctx.strokeStyle = '#12141f'; ctx.lineWidth = 3; ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.arc(ex, ey + 3, 6, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+      ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.arc(ex, ey + 4, 6.5, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
     } else {
-      const big = mood === 'scared' ? 9 : mood === 'scream' ? 11 : 7;
-      const pupil = mood === 'calm' ? 3.5 : 2.2;
-      ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.arc(ex, ey, big, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(ex, ey, er, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      let px = s.eyeX || 0, py = s.eyeY || 0;
+      if (mood === 'scream') { px = rand(-4, 4); py = rand(-4, 4); }
+      const pr = mood === 'calm' || mood === 'determined' ? 4.8 : 3.2;
+      const lim = er - pr - 1.5;
+      const m = Math.hypot(px, py); if (m > lim) { px *= lim / m; py *= lim / m; }
       ctx.fillStyle = '#12141f';
-      const jx = mood === 'scream' ? rand(-2, 2) : 3, jy = mood === 'scream' ? rand(-2, 2) : 0;
-      ctx.beginPath(); ctx.arc(ex + jx, ey + jy, pupil, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(ex + px, ey + py, pr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(ex + px - 1.4, ey + py - 1.6, 1.3, 0, Math.PI * 2); ctx.fill();
     }
-    if (mood === 'scream' || mood === 'scared') {
-      ctx.fillStyle = '#5a0f22';
-      ctx.beginPath(); ctx.ellipse(len / 2 - 12, 8, mood === 'scream' ? 4 : 2.5, mood === 'scream' ? 5 : 2.5, 0, 0, Math.PI * 2); ctx.fill();
+
+    // eyebrow
+    ctx.strokeStyle = '#2b2d42'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath();
+    if (mood === 'determined') { ctx.moveTo(5, -17); ctx.lineTo(20, -13); }
+    else if (mood === 'scared' || mood === 'scream') { ctx.moveTo(5, -18); ctx.quadraticCurveTo(12, -24, 21, -19); }
+    else if (mood === 'happy') { ctx.moveTo(6, -14); ctx.quadraticCurveTo(13, -19, 20, -14); }
+    else { ctx.moveTo(6, -16); ctx.lineTo(20, -16); }
+    ctx.stroke();
+
+    // mouth
+    ctx.fillStyle = '#5a0f22'; ctx.strokeStyle = '#5a0f22'; ctx.lineWidth = 2.2;
+    const mx = 17, my = 8;
+    ctx.beginPath();
+    if (mood === 'scream') { ctx.ellipse(mx, my + 1, 4.5, 5.5, 0, 0, Math.PI * 2); ctx.fill(); }
+    else if (mood === 'scared') { ctx.ellipse(mx, my, 2.5, 3, 0, 0, Math.PI * 2); ctx.fill(); }
+    else if (mood === 'happy') { ctx.arc(mx, my - 1, 5, 0.1, Math.PI - 0.1); ctx.closePath(); ctx.fill(); }
+    else if (mood === 'determined') { ctx.moveTo(mx - 4, my); ctx.lineTo(mx + 3, my - 1); ctx.stroke(); }
+    else { ctx.arc(mx, my - 3, 4, 0.3, Math.PI - 0.3); ctx.stroke(); }
+
+    // sweat drop when scared
+    if (mood === 'scared') {
+      ctx.fillStyle = '#7fd4ff';
+      ctx.beginPath();
+      ctx.moveTo(-1, -22); ctx.quadraticCurveTo(3, -16, -1, -14); ctx.quadraticCurveTo(-5, -16, -1, -22);
+      ctx.fill();
     }
+    ctx.restore();
+  }
+
+  function carMood() {
+    const d = edgeM - frontX();
+    if (s.state === 'holding') return 'determined';
+    if (s.state === 'stopped') return s.result < 10 ? 'happy' : d < 1 ? 'scared' : 'calm';
+    if (s.state === 'sliding') return d < 1.2 ? 'scared' : 'determined';
+    return 'calm';
   }
 
   function drawCar() {
     const len = CAR_LEN * PPM;
     const cx = s.x * PPM + len / 2;
     const braking = s.state === 'sliding' && s.v > 0;
-    const d = edgeM - frontX();
-    let mood = 'calm';
-    if (s.state === 'stopped' && s.result < 10) mood = 'happy';
-    else if ((s.state === 'sliding' || s.state === 'stopped') && d < 1) mood = 'scared';
 
     ctx.save();
     ctx.translate(cx, GROUND_Y - WHEEL_R);
@@ -514,7 +604,7 @@
     drawWheel(len / 2 - 11, 0, s.x * PPM / WHEEL_R);
     ctx.rotate(s.tilt);
     ctx.translate(0, -CAR_H / 2 - 2);
-    drawBody(braking, mood);
+    drawBody(braking, carMood());
     ctx.restore();
   }
 
@@ -623,8 +713,8 @@
         text('CHALLENGE COMPLETE!', W / 2, 160, 34, '#ffd23f', 900);
         text('Under ' + fmtTarget(s.beatCm), W / 2, 205, 24, '#fff3c4', 700);
       }
-      text(fmt(s.result), W / 2, 330, 76, '#ffffff');
-      text(s.newBest ? 'NEW BEST!' : 'from the edge', W / 2, 395, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
+      text(fmt(s.result), W / 2, 300, 76, '#ffffff');
+      text(s.newBest ? 'NEW BEST!' : 'from the edge', W / 2, 358, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
       text(s.beat && CHALLENGES[level] ? 'TAP FOR NEXT CHALLENGE' : 'TAP TO PLAY AGAIN', W / 2, 900, 28, '#ffffff', 700);
     } else if (s.state === 'falling' || s.state === 'fell') {
       text(s.fallMsg, W / 2, 340, 64, '#ffffff');
