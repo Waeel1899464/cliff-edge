@@ -25,7 +25,13 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
   html, body { height: 100%; }
   body {
-    background: var(--bg);
+    /* Side areas on wide screens continue the game's world: sky down to the horizon, then sea
+       (the sea starts at 84.4% of the game's height, the same line as in the game), slightly
+       darkened so the game itself stays the focus. Falls back to the plain dark color. */
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(rgba(10, 10, 25, 0.38), rgba(10, 10, 25, 0.38)),
+      linear-gradient(180deg, #2a1f5c 0%, #ff7a59 60%, #ffb36b 84.2%, #1f3d7a 84.4%, #1a3468 100%);
     color: var(--fg);
     overflow: hidden;
     padding-left: max(0px, env(safe-area-inset-left, 0px));
@@ -36,6 +42,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
   canvas {
     display: block;
+    box-shadow: 0 0 48px rgba(0, 0, 0, 0.45);
     touch-action: none;
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
@@ -333,6 +340,9 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   const FINE_POINTER = !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
   function press(e) {
     e.preventDefault();
+    // preventDefault also stops the browser from moving keyboard focus into this page. Inside a
+    // platform iframe that would leave Space/Enter going to the platform page, so ask for focus.
+    try { window.focus(); } catch (err) {}
     Sound.init();
     const rect = canvas.getBoundingClientRect();
     const lx = (e.clientX - rect.left) / scale, ly = (e.clientY - rect.top) / scale;
@@ -557,16 +567,25 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     // Recording reads a separate, smaller canvas (720x1280) that gets a copy of each game frame.
     // Capturing the big game canvas directly broke drawing on some Android phones, and a smaller
     // video is lighter to encode. 720x1280 is a normal vertical video size.
-    const recCanvas = document.createElement('canvas');
-    recCanvas.width = 720; recCanvas.height = 1280;
-    const recCtx = recCanvas.getContext('2d');
-    let copying = false;
+    // Performance: this canvas is only created the first time a recording starts, and frames are
+    // copied into it only while a recorder is actually running (copyUsers > 0).
+    let recCanvas = null, recCtx = null;
+    function recSurface() {
+      if (!recCanvas) {
+        recCanvas = document.createElement('canvas');
+        recCanvas.width = 720; recCanvas.height = 1280;
+        recCtx = recCanvas.getContext('2d');
+      }
+      return recCanvas;
+    }
+    let copyUsers = 0;
     function copyFrame() {
-      if (!copying) return;
+      if (copyUsers <= 0 || !recCtx) return;
       try { recCtx.drawImage(canvas, 0, 0, recCanvas.width, recCanvas.height); } catch (e) {}
     }
-    // Platform build: clips are off (sharing and downloads are usually blocked inside platform iframes).
-    function supported() { return !IS_PORTAL && !!(window.MediaRecorder && recCanvas.captureStream); }
+    // Platform build: clips are off (sharing and downloads are usually blocked inside platform iframes),
+    // so nothing here ever runs there.
+    function supported() { return !IS_PORTAL && !!(window.MediaRecorder && HTMLCanvasElement.prototype.captureStream); }
     // MP4 plays everywhere (WhatsApp, Messenger, TikTok). Some browsers claim MP4 but write a file
     // with no picture, so MP4 is used only after a half-second test recording proves it has video.
     // Until then (or if the test fails) WebM is used.
@@ -584,13 +603,14 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       const mp4 = MP4.find(can);
       if (!mp4 || !WEBM.find(can)) return;
       let st;
-      try { st = recCanvas.captureStream(30); } catch (e) { return; }
-      copying = true;
+      try { st = recSurface().captureStream(30); } catch (e) { return; }
       const parts = [];
       let r;
-      try { r = new MediaRecorder(st, { mimeType: mp4 }); } catch (e) { return; }
+      try { r = new MediaRecorder(st, { mimeType: mp4 }); } catch (e) { st.getTracks().forEach(tr => tr.stop()); return; }
+      copyUsers++;
       r.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
       r.onstop = () => {
+        copyUsers--;
         st.getTracks().forEach(tr => tr.stop());
         if (!parts.length) return;
         const v = document.createElement('video');
@@ -604,14 +624,15 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       r.start(100);
       setTimeout(() => { try { r.stop(); } catch (e) {} }, 700);
     }
-    setTimeout(testMp4, 300);
+    // The MP4 test runs once, on the first end screen (the player is idle there), not while loading.
+    // Trade-off: the very first clip of a visit is WebM; later clips use MP4 when the test passes.
+    let mp4Tested = false;
     function start(roundId) {
       if (!supported()) return;
       stop();
       onReady = null;
       try {
-        if (!stream) stream = recCanvas.captureStream(30);
-        copying = true;
+        if (!stream) stream = recSurface().captureStream(30);
         if (stream.getAudioTracks().length === 0) { const a = Sound.streamTrack(); if (a) stream.addTrack(a); }
         const mime = pickMime();
         const r = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 5000000 } : undefined);
@@ -619,6 +640,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
         const myRound = roundId;
         r.ondataavailable = e => { if (e.data && e.data.size) myChunks.push(e.data); };
         r.onstop = () => {
+          copyUsers--;
           if (finishing === myRound) finishing = -1;
           if (!myChunks.length) { onReady = null; return; }
           // Plain type without codec details: phones reject 'video/webm;codecs=...' for sharing.
@@ -628,6 +650,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
           if (onReady) { const f = onReady; onReady = null; f(clip); }
         };
         r.start(250);
+        copyUsers++;
         rec = r; recRound = roundId; startedAt = performance.now();
       } catch (e) { rec = null; }
     }
@@ -636,6 +659,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       rec = null;
     }
     function tick(st) {
+      if (!mp4Tested && !rec && (st.state === 'stopped' || st.state === 'fell')) { mp4Tested = true; testMp4(); }
       if (!rec) return;
       const now = performance.now();
       if (now - startedAt > MAX_MS) stop();
