@@ -19,7 +19,43 @@
     overscroll-behavior: none;
   }
   canvas { display: block; touch-action: none; -webkit-tap-highlight-color: transparent; }
+  /* Discoveries book: a full-screen, scrollable page over the game. */
+  .book {
+    position: fixed; inset: 0; z-index: 10; background: var(--bg); color: var(--fg);
+    display: flex; flex-direction: column; font-family: Fredoka, ui-rounded, system-ui, sans-serif;
+    padding: max(12px, env(safe-area-inset-top, 0px)) 16px max(12px, env(safe-area-inset-bottom, 0px));
+  }
+  .book-head { display: flex; align-items: center; gap: 12px; max-width: 560px; width: 100%; margin: 0 auto; padding: 4px 0 10px; }
+  .book-head h2 { margin: 0; font-size: 26px; font-weight: 700; flex: 1; }
+  .book-count { font-size: 15px; font-weight: 500; opacity: 0.7; display: block; }
+  .book-close {
+    min-width: 48px; height: 48px; border-radius: 24px; border: 4px solid var(--fg); background: #fff;
+    font: 700 22px Fredoka, system-ui, sans-serif; color: var(--fg); cursor: pointer;
+  }
+  .book-close:focus-visible { outline: 3px solid #ff4f7b; outline-offset: 2px; }
+  .book-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; max-width: 560px; width: 100%; margin: 0 auto; padding-bottom: 24px; }
+  .book-level { margin: 14px 0 8px; font-size: 17px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .book-dot { width: 22px; height: 22px; border-radius: 50%; border: 3px solid var(--fg); display: inline-flex;
+    align-items: center; justify-content: center; font-size: 12px; }
+  .book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; }
+  .book-item { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
+  .book-ball { width: 56px; height: 56px; border-radius: 50%; border: 4px solid var(--fg);
+    display: flex; align-items: center; justify-content: center; font-size: 28px;
+    font-family: "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif; }
+  .book-item.missing .book-ball { background: rgba(43,34,51,0.08) !important; border-color: rgba(43,34,51,0.25);
+    color: rgba(43,34,51,0.35); font: 700 24px Fredoka, system-ui, sans-serif; }
+  .book-name { font-size: 13px; font-weight: 500; line-height: 1.15; }
+  .book-item.missing .book-name { opacity: 0.45; }
+  [hidden] { display: none !important; }
 </style>
+
+<div id="book" class="book" hidden role="dialog" aria-modal="true" aria-labelledby="book-title">
+  <div class="book-head">
+    <h2 id="book-title">Discoveries <span id="book-count" class="book-count"></span></h2>
+    <button id="book-close" class="book-close" type="button" aria-label="Close">✕</button>
+  </div>
+  <div id="book-body" class="book-body"></div>
+</div>
 
 <canvas id="game" aria-label="Merge Anything. Tap to drop things into the jar. Two things of the same size fuse into something new."></canvas>
 
@@ -129,10 +165,9 @@
   function loadJSON(key, fb) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fb; } catch (e) { return fb; } }
   function saveJSON(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
   let best = loadJSON('merge_best', 0);
-  const book = loadJSON('merge_book', {});         // things this player has made: "t|name" -> {n,e,t,first}
+  let daily = loadJSON('merge_daily', { day: 0, best: 0, tries: 0, level: 0 });   // today's challenge
   let worldFirsts = loadJSON('merge_firsts', 0);
   let wins = loadJSON('merge_wins', 0);           // times the player made a level 10 thing
-  const discoveredCount = () => Object.keys(book).length;
 
   // =====================================================================
   // Helpers
@@ -141,11 +176,18 @@
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   function hash(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
   const points = t => t * (t + 1) / 2;
+  // Daily challenge: the same things fall in the same order for every player in the world today.
+  function seeded(seed) {   // small, well-known random generator (mulberry32)
+    return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  }
+  const dayNumber = () => Math.floor((Date.now() - Date.UTC(2026, 10, 1)) / 86400000) + 1;   // #1 = 1 Nov 2026 (UTC)
+  let mode = 'normal', rng = Math.random, dailyNo = dayNumber();
   function pickDrop() {
-    let r = Math.random(), t = 1;
+    let r = rng(), t = 1;
     while (t < DROP_ODDS.length - 1 && r >= DROP_ODDS[t]) { r -= DROP_ODDS[t]; t++; }
     const p = POOL[t];
-    return { t, item: p[Math.floor(Math.random() * p.length)] };
+    return { t, item: p[Math.floor(rng() * p.length)] };
   }
 
   // =====================================================================
@@ -238,6 +280,15 @@
   // How many different things exist in the whole game (the collection goal).
   const TOTAL_THINGS = BASE.length + BOOK_RAW[2].length + BOOK_RAW[3].length +
     Object.values(WORLD).reduce((s, l) => s + l.length, 0);
+  const book = loadJSON('merge_book', {});         // things this player has made: "t|name" -> {n,e,t}
+
+  // The full list for the book, level by level.
+  const ALL_THINGS = [];
+  for (const it of BASE) ALL_THINGS.push({ t: 1, n: it.n, e: it.e });
+  for (const t of [2, 3]) for (const [, , n, e] of BOOK_RAW[t]) ALL_THINGS.push({ t, n, e });
+  for (const t in WORLD) for (const [n, e] of WORLD[t]) ALL_THINGS.push({ t: +t, n, e });
+  const isFound = th => th.t === 1 || !!book[th.t + '|' + norm(th.n)];
+  const discoveredCount = () => ALL_THINGS.reduce((c, th) => c + (isFound(th) ? 1 : 0), 0);
 
   function fuseResult(a, b, t) {
     const key = comboKey(t, a.n, b.n);
@@ -346,10 +397,14 @@
   // =====================================================================
   let bodies = [], particles = [], popups = [];
   let state, score, roundMade, roundFirsts, bestMade, held, next, readyAt, aimX, lastRecipe, banner, shake;
+  let roundTop = 1, wasBest = false, wasDailyBest = false;
   let overAt = 0, firstDrop = true, idCounter = 0, warnT = 0, nextTick = 0, clock = 0;
   const gulp = { look: { x: W / 2, y: 600 }, blinkAt: 2, blink: 0, wob: 0, wobV: 0, wow: 0 };
 
-  function newGame() {
+  function newGame(m = mode) {
+    mode = m;
+    dailyNo = dayNumber();
+    rng = mode === 'daily' ? seeded(dailyNo * 7919 + 17) : Math.random;
     bodies = []; particles = []; popups = [];
     state = 'play'; score = 0; roundMade = 0; roundFirsts = 0; bestMade = null;
     held = pickDrop(); next = pickDrop(); readyAt = 0; aimX = W / 2;
@@ -447,7 +502,17 @@
   function gameOver() {
     state = 'burp'; overAt = clock;
     Sound.burp(); shake = 16; gulp.wobV -= 30;
-    if (score > best) { best = score; saveJSON('merge_best', best); }
+    roundTop = bestMade ? bestMade.t : 1;
+    if (mode === 'daily') {
+      if (daily.day !== dailyNo) daily = { day: dailyNo, best: 0, tries: 0, level: 0 };
+      daily.tries++;
+      wasDailyBest = score > daily.best;
+      if (score > daily.best) { daily.best = score; daily.level = roundTop; }
+      saveJSON('merge_daily', daily);
+    } else {
+      wasBest = score > best;
+      if (score > best) { best = score; saveJSON('merge_best', best); }
+    }
     // Gulp burps everything out of the jar.
     for (const b of bodies) {
       const vx = (b.x - W / 2) * rand(1.2, 2.6) + rand(-200, 200);
@@ -462,7 +527,7 @@
   // Physics (simple circles, Verlet integration, several small steps per frame)
   // =====================================================================
   function physicsStep(dt) {
-    const burping = state === 'burp';
+    const burping = state !== 'play';      // after the burp nothing fuses or scores any more
     const g = GRAVITY * dt * dt * (burping ? 0.55 : 1);
     for (const b of bodies) {
       const vx = (b.x - b.px) * 0.998, vy = (b.y - b.py) * 0.998;
@@ -522,6 +587,68 @@
   // Input: touch/aim, lift to drop. One finger, nothing else.
   // =====================================================================
   const MUTE = { x: W - 38, y: 40, r: 26 };
+  const BOOK_HIT = { x: W - 62, y: 97, w: 110, h: 44 };
+  const OVER_TOP = 330;
+  const BTN_AGAIN = { x: W / 2, y: OVER_TOP + 455, w: 300, h: 64 };
+  const BTN_LEFT = { x: W / 2 - 108, y: OVER_TOP + 535, w: 200, h: 54 };
+  const BTN_RIGHT = { x: W / 2 + 108, y: OVER_TOP + 535, w: 200, h: 54 };
+  const BTN_INTRO = { x: W / 2, y: 846, w: 340, h: 56 };
+  const inBtn = (b, p) => Math.abs(p.x - b.x) < b.w / 2 && Math.abs(p.y - b.y) < b.h / 2;
+  let toast = { msg: '', until: 0 };
+  const showToast = (msg, ms = 2400) => { toast = { msg, until: performance.now() + ms }; };
+
+  // ---- Discoveries book ----
+  const bookEl = document.getElementById('book');
+  const bookOpen = () => !bookEl.hidden;
+  function openBook() {
+    const body = document.getElementById('book-body');
+    body.textContent = '';
+    document.getElementById('book-count').textContent = `${discoveredCount()} of ${TOTAL_THINGS} found`;
+    for (let t = 1; t <= MAX_TIER; t++) {
+      const list = ALL_THINGS.filter(th => th.t === t);
+      const found = list.filter(isFound).length;
+      const h = document.createElement('div'); h.className = 'book-level';
+      const dot = document.createElement('span'); dot.className = 'book-dot'; dot.style.background = TIER_COLOR[t]; dot.textContent = t;
+      h.append(dot, document.createTextNode(`Level ${t}  ·  ${found}/${list.length}`));
+      const grid = document.createElement('div'); grid.className = 'book-grid';
+      for (const th of list) {
+        const ok = isFound(th);
+        const cell = document.createElement('div'); cell.className = 'book-item' + (ok ? '' : ' missing');
+        const ball = document.createElement('div'); ball.className = 'book-ball';
+        ball.style.background = TIER_COLOR[t]; ball.textContent = ok ? th.e : '?';
+        const name = document.createElement('div'); name.className = 'book-name'; name.textContent = ok ? th.n : '???';
+        cell.append(ball, name); grid.appendChild(cell);
+      }
+      body.append(h, grid);
+    }
+    bookEl.hidden = false;
+    document.getElementById('book-close').focus();
+  }
+  function closeBook() { bookEl.hidden = true; }
+  document.getElementById('book-close').addEventListener('click', closeBook);
+  window.addEventListener('keydown', e => { if (e.key === 'Escape' && bookOpen()) closeBook(); });
+
+  // ---- Share the daily result (works in apps without a share menu too) ----
+  const GAME_URL = '';   // public link, added when the game is published
+  function shareDaily() {
+    const lvl = roundTop;
+    const msg = `Merge Anything · Daily #${dailyNo}\n${score} points · Level ${lvl}/10\n` +
+      '🟩'.repeat(lvl) + '⬜'.repeat(MAX_TIER - lvl) +
+      `\nSame drops for everyone today. Can you beat me?` + (GAME_URL ? '\n' + GAME_URL : '');
+    if (navigator.share) {
+      navigator.share({ text: msg }).catch(err => { if (!err || err.name !== 'AbortError') copyMsg(msg); });
+    } else copyMsg(msg);
+  }
+  function copyMsg(str) {
+    let ok = false;
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = str; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); ok = document.execCommand('copy'); ta.remove();
+    } catch (e) {}
+    if (!ok) { try { navigator.clipboard.writeText(str); ok = true; } catch (e) {} }
+    showToast(ok ? 'Result copied! Paste it to your friends' : 'Could not copy');
+  }
   let aiming = false;
   function toLocal(e) {
     const rect = canvas.getBoundingClientRect();
@@ -532,8 +659,15 @@
     Sound.init();
     const p = toLocal(e);
     if (Math.hypot(p.x - MUTE.x, p.y - MUTE.y) < MUTE.r + 8) { Sound.toggleMute(); return; }
-    if (state === 'over') { if (clock - overAt > 1.9) newGame(); return; }
+    if (inBtn(BOOK_HIT, p)) { pendingBook = true; return; }
+    if (state === 'over') {
+      if (clock - overAt <= 1.9) return;
+      if (inBtn(BTN_LEFT, p)) { newGame(mode === 'daily' ? 'normal' : 'daily'); return; }
+      if (inBtn(BTN_RIGHT, p)) { if (mode === 'daily') pendingShare = true; else pendingBook = true; return; }
+      newGame(); return;
+    }
     if (state !== 'play') return;
+    if (firstDrop && mode === 'normal' && inBtn(BTN_INTRO, p)) { newGame('daily'); return; }
     aiming = true; aimX = p.x;
     try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   });
@@ -541,8 +675,12 @@
     const p = toLocal(e);
     if (aiming || e.pointerType === 'mouse') aimX = p.x;
   });
+  let pendingBook = false, pendingShare = false;
   const lift = e => {
     Sound.init();
+    // Open the book / share on finger lift: phones only allow the share menu from a tap.
+    if (pendingBook) { pendingBook = false; openBook(); return; }
+    if (pendingShare) { pendingShare = false; shareDaily(); return; }
     if (!aiming) return;
     aiming = false;
     aimX = toLocal(e).x;
@@ -555,6 +693,7 @@
   canvas.addEventListener('touchmove', block, { passive: false });
   window.addEventListener('contextmenu', block);
   window.addEventListener('keydown', e => {
+    if (bookOpen()) return;
     if (e.code === 'Space' || e.code === 'Enter') { Sound.init(); if (state === 'over' && clock - overAt > 1.9) newGame(); else dropHeld(); }
     if (e.code === 'ArrowLeft') aimX -= 24;
     if (e.code === 'ArrowRight') aimX += 24;
@@ -859,7 +998,12 @@
   function drawHUD() {
     // score
     text(String(score), W / 2, 68, 64, INK, 700);
-    text('BEST ' + best, 24, 34, 20, 'rgba(43,34,51,0.6)', 700, 'left');
+    if (mode === 'daily') {
+      const todayBest = daily.day === dailyNo ? daily.best : 0;
+      text('TODAY ' + todayBest, 24, 34, 20, 'rgba(43,34,51,0.6)', 700, 'left');
+      pill(W / 2, 20, 190, 30, '#ffe066');
+      text(`📅 DAILY #${dailyNo}`, W / 2, 21, 17, INK, 700, 'center', `${FONT}, ${EMOJI_FONT}`);
+    } else text('BEST ' + best, 24, 34, 20, 'rgba(43,34,51,0.6)', 700, 'left');
     // next
     text('NEXT', 24, 70, 15, 'rgba(43,34,51,0.55)', 700, 'left');
     if (next) {
@@ -867,12 +1011,9 @@
       ctx.drawImage(s.c, 52 - 26, 106 - 26, 52, 52);
     }
     // discoveries
+    pill(W - 62, 97, 104, 38, '#ffffff');
     text('📖', W - 92, 96, 20, INK, 500, 'center', EMOJI_FONT);
-    text(discoveredCount() + '/' + TOTAL_THINGS, W - 74, 97, 20, INK, 700, 'left');
-    if (worldFirsts > 0) {
-      text('🏆', W - 92, 126, 18, INK, 500, 'center', EMOJI_FONT);
-      text(String(worldFirsts), W - 74, 127, 20, INK, 700, 'left');
-    }
+    text(discoveredCount() + '/' + TOTAL_THINGS, W - 76, 98, fitFont('183/183', 56, 19), INK, 700, 'left');
     // mute
     ctx.strokeStyle = INK; ctx.fillStyle = INK; ctx.lineWidth = 3;
     const mx = MUTE.x, my = MUTE.y;
@@ -969,11 +1110,14 @@
     ctx.fillStyle = 'rgba(43,34,51,0.2)'; rr(50, top + 8, W - 100, 400, 34); ctx.fill();
     ctx.fillStyle = '#ffffff'; rr(50, top, W - 100, 400, 34); ctx.fill();
     ctx.lineWidth = 5; ctx.strokeStyle = INK; ctx.stroke();
-    text('BURP!', cx, top + 52, 52, '#ff4f7b', 700);
-    text('Gulp is too full', cx, top + 96, 20, 'rgba(43,34,51,0.65)', 500);
+    const isDaily = mode === 'daily';
+    text(isDaily ? `DAILY #${dailyNo}` : 'BURP!', cx, top + 52, 52, '#ff4f7b', 700);
+    text(isDaily ? 'Same drops for everyone today' : 'Gulp is too full', cx, top + 96, 20, 'rgba(43,34,51,0.65)', 500);
     text(String(score), cx, top + 160, 76, INK, 700);
-    const isBest = score >= best && score > 0;
-    text(isBest ? 'NEW BEST!' : 'BEST ' + best, cx, top + 212, 22, isBest ? '#ff4f7b' : 'rgba(43,34,51,0.6)', 700);
+    const newBest = isDaily ? wasDailyBest : wasBest;
+    const shownBest = isDaily ? daily.best : best;
+    text(newBest ? (isDaily ? "TODAY'S BEST!" : 'NEW BEST!') : (isDaily ? 'TODAY ' : 'BEST ') + shownBest,
+      cx, top + 212, 22, newBest ? '#ff4f7b' : 'rgba(43,34,51,0.6)', 700);
     if (bestMade) {
       text('Biggest thing you made', cx, top + 254, 17, 'rgba(43,34,51,0.6)', 500);
       const str = bestMade.n;
@@ -982,14 +1126,19 @@
       text(bestMade.e, cx - w / 2 - 6, top + 290, 30, '#000', 500, 'center', EMOJI_FONT);
       text(str, cx + 18, top + 291, fs, INK, 700);
     }
-    const disc = `Level ${bestMade ? bestMade.t : 1} of 10   ·   📖 ${discoveredCount()}/${TOTAL_THINGS} found`;
+    const disc = `Level ${roundTop} of 10   ·   📖 ${discoveredCount()}/${TOTAL_THINGS} found`;
     text(disc, cx, top + 336, 19, INK, 500, 'center', `${FONT}, ${EMOJI_FONT}`);
     if (t > 1.9) {
       const p = 1 + Math.sin(clock * 5) * 0.04;
-      ctx.save(); ctx.translate(cx, top + 470); ctx.scale(p, p);
-      pill(0, 0, 300, 64, '#ffe066');
-      text('TAP TO PLAY AGAIN', 0, 1, 24, INK, 700);
+      ctx.save(); ctx.translate(BTN_AGAIN.x, BTN_AGAIN.y); ctx.scale(p, p);
+      pill(0, 0, BTN_AGAIN.w, BTN_AGAIN.h, '#ffe066');
+      text(isDaily ? 'TRY AGAIN' : 'TAP TO PLAY AGAIN', 0, 1, 24, INK, 700);
       ctx.restore();
+      const emo = `${FONT}, ${EMOJI_FONT}`;
+      pill(BTN_LEFT.x, BTN_LEFT.y, BTN_LEFT.w, BTN_LEFT.h, '#ffffff');
+      text(isDaily ? '🎲 NORMAL' : `📅 DAILY #${dailyNo}`, BTN_LEFT.x, BTN_LEFT.y + 1, 19, INK, 700, 'center', emo);
+      pill(BTN_RIGHT.x, BTN_RIGHT.y, BTN_RIGHT.w, BTN_RIGHT.h, isDaily ? '#a5e37a' : '#ffffff');
+      text(isDaily ? '📤 SHARE' : '📖 BOOK', BTN_RIGHT.x, BTN_RIGHT.y + 1, 19, INK, 700, 'center', emo);
     }
     ctx.restore();
   }
@@ -1020,7 +1169,11 @@
     text('Make bigger and bigger things.', W / 2, 726, 22, 'rgba(43,34,51,0.75)', 500);
     text('Reach level 10 to WIN!', W / 2, 758, 24, '#ff4f7b', 700);
     text('Don\'t let Gulp overflow!', W / 2, 792, 22, 'rgba(43,34,51,0.75)', 500);
-    text('Touch, slide, let go to drop', W / 2, 850, 20, 'rgba(43,34,51,0.6)', 500);
+    text('Touch, slide, let go to drop', W / 2, 462, 19, 'rgba(43,34,51,0.6)', 500);
+    if (mode === 'normal') {
+      pill(BTN_INTRO.x, BTN_INTRO.y, BTN_INTRO.w, BTN_INTRO.h, '#ffe066');
+      text(`📅 TODAY'S CHALLENGE #${dailyNo}`, BTN_INTRO.x, BTN_INTRO.y + 1, 20, INK, 700, 'center', `${FONT}, ${EMOJI_FONT}`);
+    } else text(`📅 Daily #${dailyNo}: same drops for everyone`, W / 2, 846, 20, INK, 700, 'center', `${FONT}, ${EMOJI_FONT}`);
   }
 
   function draw() {
@@ -1063,6 +1216,11 @@
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
     drawHUD();
     drawOverPanel();
+    if (performance.now() < toast.until) {
+      const fs = fitFont(toast.msg, W - 80, 20);
+      pill(W / 2, 290, Math.min(W - 40, measure(toast.msg, fs) + 40), 48, INK, INK);
+      text(toast.msg, W / 2, 291, fs, '#ffffff', 700);
+    }
   }
 
   // =====================================================================
@@ -1072,7 +1230,7 @@
   function frame(now) {
     const dt = Math.min(0.05, (now - lastT) / 1000);
     lastT = now;
-    update(dt);
+    if (!bookOpen()) update(dt);
     draw();
     requestAnimationFrame(frame);
   }
@@ -1080,10 +1238,11 @@
 
   // Small hook for automated checks.
   window.__merge = { get bodies() { return bodies; }, get state() { return state; }, get score() { return score; },
-    drop(x) { aimX = x; dropHeld(); }, book: BOOK, RADII, DROP_ODDS, fuseResult, WORLD, POOL, TOTAL_THINGS,
+    drop(x) { aimX = x; dropHeld(); }, book: BOOK, ALL_THINGS, openBook, newGame, get mode() { return mode; }, RADII, DROP_ODDS, fuseResult, WORLD, POOL, TOTAL_THINGS,
     // Plays a round with random drops as fast as possible; returns how it went.
-    async sim(maxDrops = 400) {
-      newGame(); firstDrop = false; let drops = 0, time = 0;
+    heldName() { return held.item.n; }, forceNext() { held = next; next = pickDrop(); },
+    async sim(maxDrops = 400, keepMode = false) {
+      newGame(keepMode ? mode : 'normal'); firstDrop = false; let drops = 0, time = 0;
       while (state === 'play' && drops < maxDrops) {
         if (held && clock >= readyAt) { aimX = rand(JAR_L, JAR_R); dropHeld(); drops++; }
         update(1 / 60); time += 1 / 60; await null;
