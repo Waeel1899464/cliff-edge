@@ -212,9 +212,15 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     saveJSON('cliff_streak', st);
   }
   // Same numbers for everyone on the same date: a small seeded random generator.
-  function dailyParams() {
+  // Assist (default): ruler on the cliff, live distance while holding, fixed layout per cliff,
+  // and a ghost of your previous try on the same cliff. Add ?classic=1 to the link for the old version.
+  const ASSIST = !new URLSearchParams(location.search).has('classic');
+  let lastTry = null;   // { key, release, stop } in meters (car front), from the previous try
+
+  function dailyParams() { return seededParams('cliff-edge-' + dayKey()); }
+  function seededParams(key) {
     let h = 2166136261;
-    for (const ch of 'cliff-edge-' + dayKey()) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+    for (const ch of key) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
     let a = h >>> 0;
     const r = () => { a = (a + 0x6D2B79F5) >>> 0; let x = a; x = Math.imul(x ^ (x >>> 15), x | 1); x ^= x + Math.imul(x ^ (x >>> 7), x | 61); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
     return {
@@ -246,15 +252,17 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       ({ si, dist, vmax } = dailyParams());
     } else {
       mode = 'run';
+      if (ASSIST) ({ si, dist, vmax } = seededParams('cliff-' + cliff));   // cliff 7 is the same cliff every time
     }
     const surface = SURFACES[si];
+    const layoutKey = fr ? 'friend' : daily ? 'daily-' + dayKey() : 'cliff-' + cliff + (ASSIST ? '' : '-' + roundCounter);
     s = {
       id: ++roundCounter,
       state: 'ready',
       surface,
       params: { si, dist, vmax },
       friend: fr, friendTry: fr ? fr.tries : 0, friendWin: false,
-      daily, dailyTry: 0, newDailyBest: false,
+      daily, dailyTry: 0, newDailyBest: false, layoutKey, releaseFront: null,
       cliff, target: runTarget(cliff - 1), cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
       vmax,
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
@@ -305,7 +313,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (pendingShare) { pendingShare = false; doShare(); return; }
     if (activePointer !== null && e.pointerId !== activePointer) return;
     activePointer = null;
-    if (s.state === 'holding') s.state = 'sliding';
+    if (s.state === 'holding') { s.state = 'sliding'; s.releaseFront = frontX(); }
   }
   canvas.addEventListener('pointerdown', press);
   canvas.addEventListener('pointerup', release);
@@ -796,7 +804,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     saveProgress();
   }
 
+  function rememberTry(stopped) {
+    lastTry = { key: s.layoutKey, release: s.releaseFront, stop: stopped ? frontX() : null };
+  }
+
   function startFall() {
+    rememberTry(false);
     if (!s.friend && !s.daily) missCliff();
     s.state = 'falling';
     s.endAt = performance.now();
@@ -886,6 +899,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
         s.state = 'stopped';
         s.endAt = performance.now();
         s.result = (edgeM - frontX()) * 100;          // centimeters
+        rememberTry(true);
         if (s.friend) { s.friendWin = s.friend.score === null || s.result < s.friend.score; if (s.friendWin) s.friend.won = true; }
         if (best === null || s.result < best) { best = s.result; save('cliff_best', best); s.newBest = true; }
         if (s.daily) {
@@ -1189,6 +1203,53 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.restore();
   }
 
+  // Ruler on the cliff top, plus the ghost of the previous try on this same cliff.
+  function drawAssist() {
+    const top = GROUND_Y;
+    ctx.save();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    // meter marks
+    for (let m = 1; m <= 5; m++) {
+      const x = EDGE_X - m * PPM;
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillRect(x - 1, top, 2, 12);
+      ctx.font = '800 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.fillText(m + 'm', x, top + 26);
+    }
+    // fine marks near the edge (readable when the camera zooms in)
+    [[0.5, '50'], [0.2, '20'], [0.1, '10']].forEach(([m, label]) => {
+      const x = EDGE_X - m * PPM;
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.fillRect(x - 0.5, top, 1, 6);
+      if (cam.z > 1.6) {
+        ctx.font = '800 5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.fillText(label, x, top + 11);
+      }
+    });
+    // ghost of the previous try on this cliff
+    if (lastTry && lastTry.key === s.layoutKey && s.state !== 'stopped' && !s.parts) {
+      if (lastTry.release !== null) {
+        const x = lastTry.release * PPM;
+        ctx.strokeStyle = 'rgba(255,210,63,0.95)'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(x, top - 46); ctx.lineTo(x, top); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.fillStyle = '#ffd23f';
+        ctx.fillText('LET GO', x, top - 54);
+      }
+      if (lastTry.stop !== null) {
+        const len = CAR_LEN * PPM, x = lastTry.stop * PPM - len;
+        ctx.fillStyle = 'rgba(255,255,255,0.28)';
+        ctx.beginPath(); ctx.roundRect(x, top - WHEEL_R * 2 - CAR_H - 2, len, CAR_H + WHEEL_R * 2 + 2, 10); ctx.fill();
+        ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillText('LAST', x + len / 2, top - WHEEL_R * 2 - CAR_H - 12);
+      }
+    }
+    ctx.restore();
+  }
+
   function drawMuteIcon() {
     ctx.save();
     ctx.translate(MUTE_X, MUTE_Y);
@@ -1257,8 +1318,9 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.font = '800 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    if (s.state === 'ready' || s.state === 'holding') ctx.fillText(s.surface.name, EDGE_X - 16, GROUND_Y + 40);
+    if (s.state === 'ready' || s.state === 'holding') ctx.fillText(s.surface.name, EDGE_X - 16, GROUND_Y + (ASSIST ? 62 : 40));
 
+    if (ASSIST) drawAssist();
     if (s.parts) drawParts(); else drawCar();
 
     // sea drawn over the pieces so sinking parts look underwater
@@ -1328,7 +1390,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
         text('HOLD TO DRIVE', W / 2, 380, 40, '#ffffff');
         text('Let go to stop at the edge', W / 2, 426, 22, '#fff3c4', 600);
       }
-    } else if (s.state === 'sliding') {
+    } else if (s.state === 'sliding' || (ASSIST && s.state === 'holding')) {
       text(fmt(Math.max(0, (edgeM - frontX()) * 100)), W / 2, 340, 52, 'rgba(255,255,255,0.9)');
     } else if (s.state === 'stopped') {
       text(fmt(s.result), W / 2, 300, 76, '#ffffff');
