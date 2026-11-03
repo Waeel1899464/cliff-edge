@@ -187,15 +187,65 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     }
   } catch (e) {}
 
+  // ---- Daily challenge: one cliff for the whole world each day (UTC), 3 tries, plus a day streak ----
+  const DAILY_TRIES = 3;
+  const dayKey = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 10);   // e.g. 2026-11-03
+  function loadJSON(key) { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; } }
+  function saveJSON(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
+  function getDaily() {
+    let d = loadJSON('cliff_daily');
+    if (!d || d.day !== dayKey()) d = { day: dayKey(), tries: 0, best: null };
+    return d;
+  }
+  function dailyLeft() { return DAILY_TRIES - getDaily().tries; }
+  function getStreak() {
+    const st = loadJSON('cliff_streak');
+    if (!st) return 0;
+    // A streak survives today and yesterday; any older and it has been broken.
+    return (st.last === dayKey() || st.last === dayKey(Date.now() - 864e5)) ? (st.count | 0) : 0;
+  }
+  function markStreak() {
+    const st = loadJSON('cliff_streak') || { last: '', count: 0 };
+    if (st.last === dayKey()) return;
+    st.count = st.last === dayKey(Date.now() - 864e5) ? (st.count | 0) + 1 : 1;
+    st.last = dayKey();
+    saveJSON('cliff_streak', st);
+  }
+  // Same numbers for everyone on the same date: a small seeded random generator.
+  function dailyParams() {
+    let h = 2166136261;
+    for (const ch of 'cliff-edge-' + dayKey()) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+    let a = h >>> 0;
+    const r = () => { a = (a + 0x6D2B79F5) >>> 0; let x = a; x = Math.imul(x ^ (x >>> 15), x | 1); x ^= x + Math.imul(x ^ (x >>> 7), x | 61); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
+    return {
+      si: Math.floor(r() * SURFACES.length),
+      dist: Math.round((8 + r() * 5) * 1000) / 1000,
+      vmax: Math.round((6 + r() * 3) * 1000) / 1000,
+    };
+  }
+  function nextDailyIn() {
+    const now = new Date();
+    const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+    const sec = Math.max(0, Math.floor((next - now.getTime()) / 1000));
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(Math.floor(sec / 3600))}:${pad(Math.floor(sec / 60) % 60)}:${pad(sec % 60)}`;
+  }
+  let mode = 'run';   // 'run' = endless cliffs, 'daily' = today's challenge
+
   function newRound() {
     // Rounded to the millimetre so a challenge link reproduces the round exactly.
     let si = Math.floor(Math.random() * SURFACES.length);
     let dist = Math.round((8 + Math.random() * 5) * 1000) / 1000;   // meters from car front to edge
     let vmax = Math.round((6 + Math.random() * 3) * 1000) / 1000;
-    let fr = null;
+    let fr = null, daily = false;
     if (friend && !friend.won && friend.tries < FRIEND_TRIES) {
       friend.tries++;
       fr = friend; si = fr.si; dist = fr.dist; vmax = fr.vmax;
+    } else if (mode === 'daily' && dailyLeft() > 0) {
+      daily = true;
+      ({ si, dist, vmax } = dailyParams());
+    } else {
+      mode = 'run';
     }
     const surface = SURFACES[si];
     s = {
@@ -204,6 +254,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       surface,
       params: { si, dist, vmax },
       friend: fr, friendTry: fr ? fr.tries : 0, friendWin: false,
+      daily, dailyTry: 0, newDailyBest: false,
       cliff, target: runTarget(cliff - 1), cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
       vmax,
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
@@ -229,8 +280,14 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (Math.hypot(lx - MUTE_X, ly - MUTE_Y) < 34) { Sound.toggleMute(); return; }
     if (roundEnded() && inBtn(CHALLENGE_BTN, lx, ly)) { pendingChallenge = true; return; }
     if (shareVisible() && inShareBtn(lx, ly)) { pendingShare = true; return; }
+    if (pillVisible() && inBtn(DAILY_PILL, lx, ly + 0)) { toggleDaily(); return; }
     const now = performance.now();
     if (s.state === 'ready') {
+      if (s.daily) {
+        const d = getDaily(); d.tries++; saveJSON('cliff_daily', d);
+        s.dailyTry = d.tries;
+        markStreak();
+      }
       activePointer = e.pointerId;
       try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
       s.state = 'holding';
@@ -528,6 +585,11 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     return `${GAME_URL}?c=${p.si}-${Math.round(p.dist * 1000)}-${Math.round(p.vmax * 1000)}&s=${score}`;
   }
   function challengeText() {
+    if (s.daily) {
+      const d = getDaily();
+      const mine = d.best !== null ? fmt(d.best) : 'I fell off 😂';
+      return `Cliff Edge daily ${dayKey()}: ${mine} from the edge. Same cliff for everyone today, can you beat me?`;
+    }
     if (s.friend && s.friendWin && s.friend.score !== null) return `I beat your ${fmt(s.friend.score)} with ${fmt(s.result)}! Your turn, same cliff:`;
     if (s.result !== null) return `I stopped ${fmt(s.result)} from the cliff edge! Can you beat me on the same cliff?`;
     return `I flew off the cliff 😂 Can you stop at the edge? Same cliff:`;
@@ -722,7 +784,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
 
   function startFall() {
-    if (!s.friend) missCliff();
+    if (!s.friend && !s.daily) missCliff();
     s.state = 'falling';
     s.endAt = performance.now();
     s.fallT = 0;
@@ -813,7 +875,10 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
         s.result = (edgeM - frontX()) * 100;          // centimeters
         if (s.friend) { s.friendWin = s.friend.score === null || s.result < s.friend.score; if (s.friendWin) s.friend.won = true; }
         if (best === null || s.result < best) { best = s.result; save('cliff_best', best); s.newBest = true; }
-        if (!s.friend) {
+        if (s.daily) {
+          const d = getDaily();
+          if (d.best === null || s.result < d.best) { d.best = s.result; s.newDailyBest = true; saveJSON('cliff_daily', d); }
+        } else if (!s.friend) {
           if (s.result < s.target) {
             s.cleared = true;
             cliff++;
@@ -826,7 +891,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
             missCliff();
           }
         }
-        if (s.cleared || s.friendWin) Sound.fanfare();
+        if (s.cleared || s.friendWin || s.newDailyBest) Sound.fanfare();
         else if (s.newBest || s.result < 10) Sound.ding();
         else Sound.bloop();
       }
@@ -1074,6 +1139,43 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     }
   }
 
+  // Bottom line on end screens.
+  function endHint(runText, friendText) {
+    if (s.friend) return friendText;
+    if (s.daily) {
+      const left = dailyLeft();
+      return left > 0 ? `TAP TO TRY AGAIN · ${left} LEFT` : `NEXT DAILY IN ${nextDailyIn()}`;
+    }
+    return runText;
+  }
+
+  // "DAILY" pill on the home screen (top right, next to the sound button).
+  const DAILY_PILL = { x: W - 150, y: 50, w: 132, h: 42 };
+  function pillVisible() { return s.state === 'ready' && !s.friend; }
+  function toggleDaily() {
+    if (s.daily) { mode = 'run'; newRound(); return; }
+    if (dailyLeft() > 0) { mode = 'daily'; newRound(); }
+    else showToast('Daily done for today\nNext one in ' + nextDailyIn(), 3000);
+  }
+  function drawDailyPill() {
+    const b = DAILY_PILL, streak = getStreak();
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    ctx.fillStyle = s.daily ? 'rgba(255,255,255,0.9)' : 'rgba(10,10,25,0.4)';
+    ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
+    ctx.font = '900 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = s.daily ? '#12141f' : '#ffffff';
+    const label = s.daily ? '✕ EXIT DAILY' : (streak > 0 ? `DAILY 🔥${streak}` : 'DAILY');
+    ctx.fillText(label, 0, 1);
+    // red dot: today's daily not played yet
+    if (!s.daily && getDaily().tries === 0) {
+      ctx.fillStyle = '#ff3355';
+      ctx.beginPath(); ctx.arc(b.w / 2 - 6, -b.h / 2 + 5, 6, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
   function drawMuteIcon() {
     ctx.save();
     ctx.translate(MUTE_X, MUTE_Y);
@@ -1138,7 +1240,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.font = '800 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.fillText(s.surface.name, EDGE_X - 16, GROUND_Y + 40);
+    if (s.state === 'ready' || s.state === 'holding') ctx.fillText(s.surface.name, EDGE_X - 16, GROUND_Y + 40);
 
     if (s.parts) drawParts(); else drawCar();
 
@@ -1160,6 +1262,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     text('BEST ' + bestCliff, 26, 50, 22, '#ffffff', 800, 'left');
 
     drawMuteIcon();
+    if (pillVisible()) drawDailyPill();
 
     // Game link on the end screens; every recorded clip ends on one, so clips carry it.
     if (roundEnded()) {
@@ -1171,8 +1274,17 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.fillText('▶ waeel1899464.github.io/cliff-edge', W / 2, 944);
     }
 
-    // Top banner: friend challenge, or the endless run
-    if (s.friend) {
+    // Top banner: friend challenge, daily challenge, or the endless run
+    if (s.daily) {
+      const d = getDaily(), left = DAILY_TRIES - d.tries, streak = getStreak();
+      text('DAILY CHALLENGE', W / 2, 150, 20, '#ffd23f', 800);
+      if (s.state === 'ready') {
+        text(d.best !== null ? 'BEST TODAY ' + fmt(d.best) : 'ONE CLIFF FOR EVERYONE', W / 2, 194, d.best !== null ? 40 : 30, '#ffffff', 900);
+        text(`${left} ${left === 1 ? 'TRY' : 'TRIES'} LEFT TODAY`, W / 2, 238, 18, '#fff3c4', 700);
+      } else if (roundEnded()) {
+        text(streak > 0 ? `🔥 ${streak} DAY STREAK` : `TRY ${s.dailyTry}/${DAILY_TRIES}`, W / 2, 194, 26, '#ffffff', 900);
+      }
+    } else if (s.friend) {
       text(`FRIEND'S CHALLENGE · TRY ${s.friendTry}/${FRIEND_TRIES}`, W / 2, 150, 20, '#ffd23f', 800);
       text(s.friend.score === null ? 'YOUR FRIEND FELL OFF' : 'BEAT ' + fmt(s.friend.score), W / 2, 192, 38, '#ffffff', 900);
       text('Same cliff, same speed', W / 2, 232, 20, '#fff3c4', 600);
@@ -1204,12 +1316,13 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     } else if (s.state === 'stopped') {
       text(fmt(s.result), W / 2, 300, 76, '#ffffff');
       if (s.friend) text(s.friendWin ? 'YOU BEAT YOUR FRIEND!' : 'YOUR FRIEND WINS', W / 2, 358, 30, s.friendWin ? '#ffd23f' : '#fff3c4', 900);
+      else if (s.daily) text(s.newDailyBest ? 'NEW BEST TODAY!' : 'BEST TODAY ' + fmt(getDaily().best), W / 2, 358, 28, s.newDailyBest ? '#ffd23f' : '#fff3c4', 800);
       else text(s.newBest ? 'NEW BEST STOP!' : 'from the edge', W / 2, 358, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
-      text(s.friend ? 'TAP TO PLAY AGAIN' : s.cleared ? `TAP FOR CLIFF ${cliff}` : `TAP TO RETRY CLIFF ${cliff}`, W / 2, 900, 28, '#ffffff', 700);
+      text(endHint(s.cleared ? `TAP FOR CLIFF ${cliff}` : `TAP TO RETRY CLIFF ${cliff}`, 'TAP TO PLAY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
     } else if (s.state === 'falling' || s.state === 'fell') {
       text(s.fallMsg, W / 2, 340, 64, '#ffffff');
       if (s.friend) text(s.friend.score === null ? 'YOU BOTH FELL!' : 'YOUR FRIEND WINS', W / 2, 400, 28, '#fff3c4', 900);
-      text(s.friend ? 'TAP TO TRY AGAIN' : `TAP TO RETRY CLIFF ${cliff}`, W / 2, 900, 28, '#ffffff', 700);
+      text(endHint(`TAP TO RETRY CLIFF ${cliff}`, 'TAP TO TRY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
     }
     if (shareVisible()) drawShareBtn();
     if (roundEnded()) drawChallengeBtn();
