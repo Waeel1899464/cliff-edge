@@ -118,16 +118,14 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   ];
   let skin = SKINS[0];
 
-  // Challenge ladder. Percentages are first guesses; replace with real player data after testing.
-  const CHALLENGES = [
-    { cm: 100, fail: '50%' },
-    { cm: 50,  fail: '70%' },
-    { cm: 25,  fail: '85%' },
-    { cm: 10,  fail: '95%' },
-    { cm: 5,   fail: '99%' },
-    { cm: 2,   fail: '99.5%' },
-    { cm: 1,   fail: '99.9%' },
-  ];
+  // Endless run (like Flappy Bird's pipe count): clear cliff after cliff, each target smaller.
+  // Miss the target or fall and the run starts again from cliff 1. The score is cliffs in a row.
+  // Targets: 100, 78, 61, 47, 37, 29 ... 10, 8.3, 6.5 ... down to 1 cm, then 1 cm forever.
+  function runTarget(n) {
+    const v = 100 * Math.pow(0.78, n);
+    if (v >= 10) return Math.round(v);
+    return Math.max(1, Math.round(v * 10) / 10);
+  }
 
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
@@ -150,7 +148,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function load(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : parseFloat(v); } catch (e) { return fallback; } }
   function save(key, v) { try { localStorage.setItem(key, String(v)); } catch (e) {} }
   let best = load('cliff_best', null);
-  let level = Math.min(load('cliff_level', 0), CHALLENGES.length);   // index of current challenge
+  let run = 0;                                  // cliffs cleared in the current run
+  let bestRun = load('cliff_bestrun', 0);       // the number players compete on
 
   // ---------- Round state ----------
   // states: ready -> holding -> sliding -> stopped | falling -> fell
@@ -194,6 +193,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       surface,
       params: { si, dist, vmax },
       friend: fr, friendTry: fr ? fr.tries : 0, friendWin: false,
+      cliff: run + 1, target: runTarget(run), cleared: false, runOver: false, runFinal: 0, newRun: false,
       vmax,
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
       v: 0, a: 0,
@@ -700,7 +700,10 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
 
   // Break the car into pieces that tumble down the cliff.
+  function endRun() { s.runOver = true; s.runFinal = run; run = 0; }
+
   function startFall() {
+    if (!s.friend) endRun();
     s.state = 'falling';
     s.endAt = performance.now();
     s.fallT = 0;
@@ -791,14 +794,18 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
         s.result = (edgeM - frontX()) * 100;          // centimeters
         if (s.friend) { s.friendWin = s.friend.score === null || s.result < s.friend.score; if (s.friendWin) s.friend.won = true; }
         if (best === null || s.result < best) { best = s.result; save('cliff_best', best); s.newBest = true; }
-        if (level < CHALLENGES.length && s.result < CHALLENGES[level].cm) {
-          s.beat = true;
-          s.beatCm = CHALLENGES[level].cm;
-          level++; save('cliff_level', level);
-          puff(EDGE_X - 30, GROUND_Y - 40, 30, '#ffd23f', 160, 380, 5, 1.1);
-          puff(EDGE_X - 30, GROUND_Y - 40, 20, '#ff4f7b', 160, 380, 4, 1.1);
+        if (!s.friend) {
+          if (s.result < s.target) {
+            s.cleared = true;
+            run++;
+            if (run > bestRun) { bestRun = run; save('cliff_bestrun', bestRun); s.newRun = true; }
+            puff(EDGE_X - 30, GROUND_Y - 40, 30, '#ffd23f', 160, 380, 5, 1.1);
+            puff(EDGE_X - 30, GROUND_Y - 40, 20, '#ff4f7b', 160, 380, 4, 1.1);
+          } else {
+            endRun();
+          }
         }
-        if (s.beat) Sound.fanfare();
+        if (s.cleared || s.friendWin) Sound.fanfare();
         else if (s.newBest || s.result < 10) Sound.ding();
         else Sound.bloop();
       }
@@ -856,7 +863,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (cm < 100) return cm.toFixed(1) + ' cm';
     return (cm / 100).toFixed(2) + ' m';
   }
-  function fmtTarget(cm) { return cm >= 100 ? (cm / 100) + ' m' : cm + ' cm'; }
+  function fmtTarget(cm) { return cm >= 100 ? (cm / 100) + ' m' : (cm >= 10 ? Math.round(cm) : cm.toFixed(1)) + ' cm'; }
 
   function text(str, x, y, size, color, weight = 800) {
     ctx.font = `${weight} ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
@@ -1105,7 +1112,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.restore();
 
     // HUD (screen space)
-    text('BEST ' + (best === null ? '—' : fmt(best)), W / 2, 50, 24, '#ffffff', 700);
+    text('BEST RUN ' + bestRun, W / 2, 50, 24, '#ffffff', 800);
     text(s.surface.name, W / 2, 86, 22, s.surface.top, 800);
 
     drawMuteIcon();
@@ -1118,21 +1125,22 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.fillText('▶ waeel1899464.github.io/cliff-edge', W / 2, 944);
 
-    // Challenge banner
-    const ch = CHALLENGES[level];
-    if (s.friend && (s.state !== 'stopped' || !s.beat)) {
+    // Top banner: friend challenge, or the endless run
+    const plural = n => n + (n === 1 ? ' cliff' : ' cliffs');
+    if (s.friend) {
       text(`FRIEND'S CHALLENGE · TRY ${s.friendTry}/${FRIEND_TRIES}`, W / 2, 150, 20, '#ffd23f', 800);
       text(s.friend.score === null ? 'YOUR FRIEND FELL OFF' : 'BEAT ' + fmt(s.friend.score), W / 2, 192, 38, '#ffffff', 900);
       text('Same cliff, same speed', W / 2, 232, 20, '#fff3c4', 600);
-    } else if (s.state !== 'stopped' || !s.beat) {
-      if (ch) {
-        text(`CHALLENGE ${level + 1}/${CHALLENGES.length}`, W / 2, 150, 20, '#ffd23f', 800);
-        text('STOP UNDER ' + fmtTarget(ch.cm), W / 2, 192, 38, '#ffffff', 900);
-        text(`${ch.fail} of players can't`, W / 2, 232, 20, '#fff3c4', 600);
-      } else {
-        text('ALL CHALLENGES DONE', W / 2, 150, 20, '#ffd23f', 800);
-        text('CHASE 0.0 cm', W / 2, 192, 38, '#ffffff', 900);
-      }
+    } else if (s.cleared) {
+      text('CLIFF CLEARED!', W / 2, 150, 34, '#ffd23f', 900);
+      text(s.newRun ? `NEW RECORD: ${plural(run)} in a row` : `${plural(run)} in a row`, W / 2, 196, 24, s.newRun ? '#ffd23f' : '#fff3c4', 800);
+    } else if (s.runOver && (s.state === 'stopped' || s.state === 'fell' || s.splashed)) {
+      text('RUN OVER', W / 2, 150, 34, '#ff8fa8', 900);
+      text(`${plural(s.runFinal)} in a row · target was ${fmtTarget(s.target)}`, W / 2, 196, 22, '#fff3c4', 700);
+    } else {
+      text(`CLIFF ${s.cliff}`, W / 2, 150, 20, '#ffd23f', 800);
+      text('STOP UNDER ' + fmtTarget(s.target), W / 2, 192, 38, '#ffffff', 900);
+      text(s.cliff === 1 ? 'Clear cliffs in a row. Each one is harder.' : `Best run: ${plural(bestRun)}`, W / 2, 232, 20, '#fff3c4', 600);
     }
 
     if (s.state === 'ready') {
@@ -1141,18 +1149,14 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     } else if (s.state === 'sliding') {
       text(fmt(Math.max(0, (edgeM - frontX()) * 100)), W / 2, 340, 52, 'rgba(255,255,255,0.9)');
     } else if (s.state === 'stopped') {
-      if (s.beat) {
-        text('CHALLENGE COMPLETE!', W / 2, 160, 34, '#ffd23f', 900);
-        text('Under ' + fmtTarget(s.beatCm), W / 2, 205, 24, '#fff3c4', 700);
-      }
       text(fmt(s.result), W / 2, 300, 76, '#ffffff');
       if (s.friend) text(s.friendWin ? 'YOU BEAT YOUR FRIEND!' : 'YOUR FRIEND WINS', W / 2, 358, 30, s.friendWin ? '#ffd23f' : '#fff3c4', 900);
-      else text(s.newBest ? 'NEW BEST!' : 'from the edge', W / 2, 358, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
-      text(s.beat && CHALLENGES[level] ? 'TAP FOR NEXT CHALLENGE' : 'TAP TO PLAY AGAIN', W / 2, 900, 28, '#ffffff', 700);
+      else text(s.newBest ? 'NEW BEST STOP!' : 'from the edge', W / 2, 358, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
+      text(s.friend ? 'TAP TO PLAY AGAIN' : s.cleared ? `TAP FOR CLIFF ${run + 1}` : 'TAP TO START A NEW RUN', W / 2, 900, 28, '#ffffff', 700);
     } else if (s.state === 'falling' || s.state === 'fell') {
       text(s.fallMsg, W / 2, 340, 64, '#ffffff');
       if (s.friend) text(s.friend.score === null ? 'YOU BOTH FELL!' : 'YOUR FRIEND WINS', W / 2, 400, 28, '#fff3c4', 900);
-      text('TAP TO TRY AGAIN', W / 2, 900, 28, '#ffffff', 700);
+      text(s.friend ? 'TAP TO TRY AGAIN' : 'TAP TO START A NEW RUN', W / 2, 900, 28, '#ffffff', 700);
     }
     if (shareVisible()) drawShareBtn();
     if (roundEnded()) drawChallengeBtn();
