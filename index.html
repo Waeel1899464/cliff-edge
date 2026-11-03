@@ -382,7 +382,7 @@
   function inShareBtn(lx, ly) {
     return Math.abs(lx - SHARE_BTN.x) < SHARE_BTN.w / 2 && Math.abs(ly - SHARE_BTN.y) < SHARE_BTN.h / 2;
   }
-  function showToast(msg) { toast = { msg, until: performance.now() + 2600 }; }
+  function showToast(msg, ms = 2600) { toast = { msg, until: performance.now() + ms }; }
 
   // Must run inside a tap (pointerup) so phones allow the share sheet.
   const GAME_URL = 'https://waeel1899464.github.io/cliff-edge/';
@@ -404,26 +404,49 @@
         .catch(err => { if (!err || err.code !== 'declined') showToast('Could not save the video'); });
       return;
     }
-    if (navigator.canShare && navigator.share) {
+    const shareFile = () => navigator.share({ files: [file], title: 'Cliff Edge', text: msg });
+    let why = 'no-share';
+    if (navigator.share) {
       let ok = false;
-      try { ok = navigator.canShare({ files: [file] }); } catch (e) {}
+      if (navigator.canShare) { try { ok = navigator.canShare({ files: [file] }); } catch (e) {} }
+      else ok = true;   // older browsers: no canShare, just try
+      why = ok ? '' : 'no-video-share';
       if (ok) {
-        navigator.share({ files: [file], title: 'Cliff Edge', text: msg }).catch(err => {
-          // AbortError = the player closed the share menu; anything else, let them retry.
-          if (!err || err.name !== 'AbortError') showToast('Tap SHARE CLIP again');
+        shareFile().catch(err => {
+          // AbortError = the player closed the share menu.
+          if (err && err.name === 'AbortError') return;
+          if (err && err.name === 'NotAllowedError') { showToast('Tap SHARE CLIP again'); return; }
+          saveFile(blob, file.name); explainSave('no-video-share');
         });
         return;
       }
     }
-    // Fallback: save the video file.
+    // Fallback: save the video file and say why sharing was not possible.
+    saveFile(blob, file.name);
+    explainSave(why);
+  }
+
+  function saveFile(blob, name) {
     try {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = file.name;
+      a.href = url; a.download = name;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 15000);
     } catch (e) {}
-    showToast(window.top !== window ? 'Sharing works on the public link' : 'Video saved!');
+  }
+
+  // Links opened inside TikTok, Instagram, Facebook, WhatsApp etc. run in a built-in browser that cannot share files.
+  function inAppBrowser() {
+    const ua = navigator.userAgent || '';
+    return /FBAN|FBAV|FB_IAB|Instagram|TikTok|musical_ly|Bytedance|Snapchat|Line\/|WhatsApp|Telegram|; wv\)/i.test(ua);
+  }
+
+  function explainSave(why) {
+    if (window.top !== window) showToast('Video saved\nSharing works on the public link');
+    else if (inAppBrowser()) showToast('Video saved\nTo share, open this page in Chrome', 5000);
+    else if (why === 'no-video-share') showToast('Video saved\nThis browser can\'t share videos. Try Chrome', 5000);
+    else showToast('Video saved\nThis browser can\'t share. Try Chrome', 5000);
   }
 
   // ---------- Helpers ----------
@@ -884,8 +907,10 @@
     if (shareVisible()) drawShareBtn();
     if (performance.now() < toast.until) {
       ctx.fillStyle = 'rgba(10,10,25,0.8)';
-      ctx.beginPath(); ctx.roundRect(W / 2 - 255, 690, 510, 50, 25); ctx.fill();
-      text(toast.msg, W / 2, 715, 20, '#ffffff', 700);
+      const lines = toast.msg.split('\n');
+      const th = 26 + lines.length * 28;
+      ctx.beginPath(); ctx.roundRect(W / 2 - 255, 680 - th / 2, 510, th, 22); ctx.fill();
+      lines.forEach((ln, i) => text(ln, W / 2, 680 - (lines.length - 1) * 14 + i * 28, i === 0 ? 22 : 18, i === 0 ? '#ffd23f' : '#ffffff', 700));
     }
   }
 
