@@ -50,8 +50,6 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   // Settings
   // =====================================================================
   const W = 540, H = 960;                 // logical size (9:16)
-  // Server that asks the AI what two things make. Empty = offline mode (built-in recipes only).
-  const API_URL = 'https://ydobungjaogrgpatvpys.supabase.co/functions/v1/merge';
 
   const JAR_L = 50, JAR_R = 490;          // inner walls
   const JAR_TOP = 304;                    // rim = danger line
@@ -67,6 +65,9 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   const INK = '#2b2233';
   const PALETTE = ['#ff8fa3', '#ffb86b', '#ffe066', '#a5e37a', '#6fd6c7', '#7cc4ff',
                    '#a99bff', '#f6a3dc', '#ff9f7a', '#cfe86a', '#8fe3ff', '#ffc9a8'];
+  // Every level has its own color: same color = same size = they fuse.
+  const TIER_COLOR = [null, '#8fd3ff', '#a5e37a', '#ffe066', '#ffb86b', '#ff8fa3',
+                      '#c39bff', '#6fd6c7', '#ff6b6b', '#6f9bff', '#ffd23f'];
   const EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla",sans-serif';
   const FONT = 'Fredoka, ui-rounded, "Arial Rounded MT Bold", system-ui, sans-serif';
 
@@ -149,8 +150,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function saveJSON(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
   let best = loadJSON('merge_best', 0);
   const book = loadJSON('merge_book', {});         // things this player has made: "t|name" -> {n,e,t,first}
-  const comboCache = loadJSON('merge_cache', {});  // AI answers already received
   let worldFirsts = loadJSON('merge_firsts', 0);
+  let wins = loadJSON('merge_wins', 0);           // times the player made a level 10 thing
   const discoveredCount = () => Object.keys(book).length;
 
   // =====================================================================
@@ -159,7 +160,6 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   const rand = (a, b) => a + Math.random() * (b - a);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   function hash(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
-  const colorOf = name => PALETTE[hash(norm(name)) % PALETTE.length];
   const points = t => t * (t + 1) / 2;
   function pickDrop() {
     let r = Math.random(), t = 1;
@@ -169,57 +169,115 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
 
   // =====================================================================
-  // What do two things make? Built-in book -> saved answers -> AI server -> offline guess
+  // What do two things make? Levels 2-3 use the hand-written book above.
+  // Level 4-10: each level has a fixed set of things (the WORLD below). Every thing has
+  // a few "ingredients" (tags). Two things fuse into the thing of the next level that
+  // shares the most ingredients with both of them. Same pair = same result for everyone,
+  // works offline, costs nothing, no server or AI needed.
   // =====================================================================
-  const inflight = new Map();
-  function askCombo(a, b, t) {
+  const TAGS = {
+    'Water': 'water', 'Fire': 'fire hot', 'Earth': 'earth', 'Wind': 'air sky',
+    'Ocean': 'water animal', 'Sun': 'fire hot sky space', 'Mountain': 'earth cold', 'Tornado': 'air sky',
+    'Steam': 'water hot air', 'Plant': 'plant life earth', 'Cloud': 'sky water air', 'Volcano': 'fire earth hot',
+    'Lightning': 'fire sky tech', 'Desert': 'earth hot',
+    'Whale': 'water animal', 'Beach': 'water fun hot', 'Island': 'water earth', 'Hurricane': 'water air sky',
+    'Spa Day': 'water hot fun', 'Sea Turtle': 'water animal life', 'Rain': 'water sky', 'Kraken': 'water monster',
+    'Thunder Shark': 'water animal monster', 'Oasis': 'water plant hot', 'Supernova': 'space fire',
+    'Sunrise': 'sky hot', 'Heatwave': 'hot air', 'Coffee': 'food hot', 'Sunflower': 'plant life',
+    'Rainbow': 'sky magic fun', 'Dinosaur': 'animal monster', 'Battery': 'tech', 'Cactus': 'plant hot',
+    'Snowy Peak': 'earth cold', 'Eagle': 'animal sky', 'Steam Train': 'tech hot', 'Forest': 'plant life',
+    'Snow': 'cold water', 'Diamond': 'earth magic', 'Wizard': 'magic', 'Camel': 'animal hot',
+    'Flying Cow': 'animal air fun', 'Helicopter': 'tech air', 'Autumn': 'plant air', 'Storm': 'sky water',
+    'Meteor': 'space fire', 'Superhero': 'fun sky', 'Sandstorm': 'air earth', 'Ramen': 'food hot',
+    'Tea': 'food plant', 'Ghost': 'magic monster', 'Hot Tub': 'water hot fun', 'Robot': 'tech',
+    'Genie': 'magic air', 'Tree': 'plant life', 'Cotton Candy': 'food fun', 'Chili Pepper': 'food hot',
+    'Broccoli': 'food plant', 'Tumbleweed': 'plant air', 'Sheep': 'animal cold', 'Factory': 'tech earth',
+    'WiFi': 'tech sky', 'Mirage': 'magic hot', 'Dragon': 'monster fire magic', 'Dynamite': 'fire tech',
+    'Scorpion': 'animal hot', 'Light Bulb': 'tech fire', 'Magic Glass': 'magic earth', 'Fossil': 'earth animal',
+  };
+  const WORLD = {
+    4: [
+      ['Pirate Ship', '⛵', 'water fun tech'], ['Snowman', '⛄', 'cold fun'], ['Lava Pizza', '🍕', 'food hot fire'],
+      ['Mermaid', '🧜', 'water magic life'], ['Unicorn', '🦄', 'magic animal fun'], ['Rocket', '🚀', 'space tech fire'],
+      ['Haunted House', '🏚️', 'monster magic earth'], ['Ice Cream', '🍦', 'food cold fun'], ['Popcorn', '🍿', 'food hot fun'],
+      ['Treehouse', '🏡', 'plant fun earth'], ['Cyborg Cat', '🐱', 'tech animal'], ['Storm Chaser', '🌩️', 'sky air tech'],
+      ['Sushi', '🍣', 'food water animal'], ['Dragon Egg', '🥚', 'monster fire life'], ['Cloud Castle', '🏰', 'sky magic air'],
+      ['Dance Party', '💃', 'fun hot'], ['Sand Castle', '🏯', 'earth fun water'], ['Space Cow', '🐮', 'space animal fun'],
+      ['Zombie Plant', '🧟', 'plant monster'], ['Jet Pack', '🎒', 'tech air fire'], ['Hot Cocoa', '🍫', 'food hot cold'],
+      ['Lava Lamp', '🏮', 'fire fun tech'], ['Garden Gnome', '🍄', 'plant magic earth'], ['Penguin', '🐧', 'animal cold water'],
+      ['Frog Prince', '🐸', 'animal water magic'], ['Panda', '🐼', 'animal plant life'], ['Toaster Bot', '🍞', 'food tech fun'],
+      ['Cyber Cactus', '🌵', 'plant tech hot'], ['Magic Computer', '💻', 'tech magic'], ['Water Lily', '🌸', 'water plant life'],
+      ['Salad', '🥗', 'food plant life'], ['Magic Cookie', '🍪', 'food magic fun'], ['Drill Machine', '⛏️', 'earth tech'],
+      ['Flying Fish', '🐟', 'water sky animal'], ['Soup', '🍲', 'water hot food'], ['Space Octopus', '🐙', 'water space animal'],
+      ['Shooting Star', '🌠', 'space magic sky'], ['Fluffy Dragon', '🐲', 'monster animal cold'], ['Spooky Noodles', '🍜', 'monster magic food'],
+    ],
+    5: [
+      ['Ghost Ship', '👻', 'water monster magic'], ['Ice Dragon', '🐲', 'monster cold magic'], ['Pizza Planet', '🍕', 'food space fun'],
+      ['Robot Chef', '🤖', 'tech food'], ['Rainbow Unicorn', '🦄', 'magic fun sky'], ['Moon Base', '🌕', 'space tech'],
+      ['Jungle', '🐒', 'plant animal life hot'], ['Ice Castle', '🏰', 'cold magic'], ['Thunderbird', '🦅', 'sky animal fire'],
+      ['Candy Kingdom', '🍭', 'food fun magic'], ['Deep Sea City', '🐙', 'water tech'], ['Phoenix', '🐦', 'fire animal magic life'],
+      ['Monster Truck', '🚚', 'monster tech fun'], ['Sky Whale', '🐋', 'sky animal water'], ['Mushroom Village', '🍄', 'plant magic earth'],
+      ['Lava Golem', '🗿', 'earth fire monster'], ['Yeti', '🦍', 'cold monster animal'], ['Space Hamster', '🐹', 'space animal fun'],
+      ['Weather Machine', '🌀', 'tech sky air water'], ['Pyramid', '⚱️', 'earth hot magic'],
+    ],
+    6: [
+      ['Kraken King', '🦑', 'water monster'], ['Volcano Dragon', '🐉', 'fire monster earth'], ['Flying Island', '🏝️', 'sky earth magic'],
+      ['Robot Army', '🤖', 'tech monster'], ['Space Station', '🛰️', 'space tech'], ['Fairy Forest', '🧚', 'plant magic life'],
+      ['Chocolate Factory', '🍫', 'food tech fun'], ['Frozen Kingdom', '❄️', 'cold magic earth'], ['Storm Giant', '⛈️', 'sky air monster'],
+      ['Ocean Palace', '🐚', 'water magic fun'], ['Dino Park', '🦕', 'animal life fun'], ['Sun Temple', '🌞', 'hot fire magic sky'],
+      ['Galaxy Cat', '🐈', 'space animal fun'], ['Giant Burger', '🍔', 'food fun hot'], ['Vampire Castle', '🦇', 'monster magic cold'],
+      ['Rainforest', '🌳', 'plant water life hot'], ['Robot Garden', '🌻', 'tech plant life'],
+    ],
+    7: [
+      ['Mecha Dragon', '🐉', 'tech monster fire'], ['Atlantis', '🔱', 'water magic earth'], ['Sky Kingdom', '🏰', 'sky magic air'],
+      ['Moon Party', '🌙', 'space fun'], ['Candy Planet', '🍬', 'food space fun'], ['Ice Age', '🧊', 'cold earth animal'],
+      ['World Tree', '🌳', 'plant life magic'], ['Lava World', '🌋', 'fire hot earth'], ['Robot City', '🏙️', 'tech earth fun'],
+      ['Monster Zoo', '🦖', 'monster animal fun'], ['Storm Titan', '🌪️', 'air sky monster'], ['Ocean Kingdom', '🐳', 'water animal life'],
+      ['Space Garden', '🌱', 'space plant life'], ['Veggie Kingdom', '🥕', 'plant food fun'],
+    ],
+    8: [
+      ['Dragon Empire', '🐲', 'monster fire magic'], ['Underwater Galaxy', '🌌', 'water space'], ['Robot Planet', '🤖', 'tech space earth'],
+      ['Eternal Winter', '❄️', 'cold sky magic'], ['Magic Jungle', '🌿', 'plant life magic hot'], ['Candy Universe', '🍭', 'food fun space'],
+      ['Volcano Planet', '🌋', 'fire earth space hot'], ['Cloud Empire', '☁️', 'sky air fun'], ['Monster Kingdom', '👹', 'monster earth fun'],
+      ['Time Machine', '⏳', 'tech magic'],
+    ],
+    9: [
+      ['Black Hole', '🕳️', 'space monster'], ['Dream World', '💭', 'magic fun sky air'], ['Ocean Planet', '🌊', 'water life space'],
+      ['Sun Dragon', '☀️', 'fire monster sky hot'], ['Mega Robot', '🦾', 'tech monster'], ['Frozen Galaxy', '🌌', 'cold space'],
+      ['Garden Of Life', '🌺', 'plant life earth'], ['Party Universe', '🎆', 'fun food space'],
+    ],
+    10: [
+      ['New Universe', '🌌', 'space magic life'], ['Dragon Of Everything', '🐉', 'monster fire magic'],
+      ['Endless Ocean', '🌊', 'water life cold'], ['Robot Overlord', '🤖', 'tech monster earth'],
+      ['Forever Party', '🥳', 'fun food sky'], ['Mother Nature', '🌍', 'plant earth life air'],
+    ],
+  };
+  const tagsOf = new Map();
+  for (const [n, tg] of Object.entries(TAGS)) tagsOf.set(norm(n), tg.split(' '));
+  for (const t in WORLD) for (const [n, , tg] of WORLD[t]) tagsOf.set(norm(n), tg.split(' '));
+  // How many different things exist in the whole game (the collection goal).
+  const TOTAL_THINGS = BASE.length + BOOK_RAW[2].length + BOOK_RAW[3].length +
+    Object.values(WORLD).reduce((s, l) => s + l.length, 0);
+
+  function fuseResult(a, b, t) {
     const key = comboKey(t, a.n, b.n);
-    if (BOOK.has(key)) return Promise.resolve(Object.assign({ first: false }, BOOK.get(key)));
-    if (comboCache[key]) return Promise.resolve(Object.assign({ first: false }, comboCache[key]));
-    if (inflight.has(key)) return inflight.get(key);
-    let p;
-    if (!API_URL) p = Promise.resolve(offlineCombo(a, b, t));
-    else {
-      p = fetchWithTimeout(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },   // plain text: no extra preflight round trip
-        body: JSON.stringify({ t, a: a.n, b: b.n }),
-      }, 7000)
-        .then(r => r.ok ? r.json() : Promise.reject(new Error('http ' + r.status)))
-        .then(d => {
-          if (!d || typeof d.n !== 'string' || typeof d.e !== 'string') throw new Error('bad answer');
-          const res = { n: d.n.slice(0, 28), e: d.e.slice(0, 16), first: !!d.first };
-          comboCache[key] = { n: res.n, e: res.e };
-          saveJSON('merge_cache', comboCache);
-          return res;
-        })
-        .catch(() => offlineCombo(a, b, t));
+    if (BOOK.has(key)) return BOOK.get(key);
+    const A = tagsOf.get(norm(a.n)) || [], B = tagsOf.get(norm(b.n)) || [];
+    const all = new Set([...A, ...B]);
+    let best = null, bestScore = -1e9;
+    for (const [n, e, tg] of WORLD[t] || []) {
+      const C = tg.split(' ');
+      const fromA = C.some(x => A.includes(x)), fromB = C.some(x => B.includes(x));
+      const shared = C.filter(x => all.has(x)).length;
+      // Must come from both parents if possible, share as much as possible, and add little that is foreign.
+      const score = (fromA ? 3 : 0) + (fromB ? 3 : 0) + shared * 2 - (C.length - shared) * 1.5
+        + (C.includes(A[0]) ? 2 : 0) + (C.includes(B[0]) ? 2 : 0)   // first ingredient = what the thing mainly is
+        + (hash(key + '|' + n) % 1000) / 2000;     // fixed tie-break, same for every player
+      if (score > bestScore) { bestScore = score; best = { n, e }; }
     }
-    inflight.set(key, p);
-    p.finally(() => inflight.delete(key));
-    return p;
+    return best || { n: a.n, e: a.e };
   }
-  function fetchWithTimeout(url, opts, ms) {
-    const ctl = window.AbortController ? new AbortController() : null;
-    const timer = setTimeout(() => ctl && ctl.abort(), ms);
-    return fetch(url, Object.assign({}, opts, ctl ? { signal: ctl.signal } : {})).finally(() => clearTimeout(timer));
-  }
-  // Used only when there is no connection to the AI: a playful guess built from the two names.
-  function offlineCombo(a, b, t) {
-    const h = hash(comboKey(t, a.n, b.n));
-    const last = s => s.split(' ').pop(), first = s => s.split(' ')[0];
-    const [A, B] = (h & 1) ? [a.n, b.n] : [b.n, a.n];
-    const pre = ['Mega', 'Tiny', 'Royal', 'Haunted', 'Cosmic', 'Turbo', 'Sleepy', 'Golden', 'Grumpy', 'Fancy', 'Ancient', 'Disco'];
-    const suf = ['King', 'Monster', 'Party', 'Machine', 'Wizard', 'Planet', 'Burger', 'Festival', 'Kingdom', 'Titan'];
-    const forms = [
-      () => pre[(h >>> 3) % pre.length] + ' ' + last(B),
-      () => last(A) + ' ' + suf[(h >>> 5) % suf.length],
-      () => first(A) + ' ' + last(B),
-    ];
-    let n = forms[(h >>> 1) % forms.length]();
-    if (norm(n) === norm(a.n) || norm(n) === norm(b.n)) n = pre[h % pre.length] + ' ' + last(B);
-    return { n: n.slice(0, 24), e: (h >>> 8) & 1 ? a.e : b.e, first: false, offline: true };
-  }
+  function askCombo(a, b, t) { return Promise.resolve(Object.assign({ first: false }, fuseResult(a, b, t))); }
 
   // =====================================================================
   // Sound (all synthesized)
@@ -345,8 +403,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     const t = a.t + 1;
     const mx = (a.x * a.r * a.r + b.x * b.r * b.r) / (a.r * a.r + b.r * b.r);
     const my = (a.y + b.y) / 2;
-    burst(mx, my, colorOf(a.item.n), 10 + a.t * 2, 160 + a.t * 25);
-    burst(mx, my, colorOf(b.item.n), 6 + a.t * 2, 140 + a.t * 25);
+    burst(mx, my, TIER_COLOR[a.t], 10 + a.t * 2, 160 + a.t * 25);
+    burst(mx, my, '#ffffff', 6 + a.t * 2, 140 + a.t * 25);
     if (a.t >= 7) shake = Math.max(shake, 4 + a.t);
     Sound.merge(t);
     score += points(t);
@@ -380,10 +438,21 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function onMade(b, res) {
     roundMade++;
     if (!bestMade || b.t > bestMade.t) bestMade = { n: b.item.n, e: b.item.e, t: b.t };
+    const prevMax = maxTierCache;
+    if (b.t > maxTierCache) { maxTierCache = b.t; saveJSON('merge_maxtier', b.t); }
     const k = b.t + '|' + norm(res.n);
     const isNew = !book[k];
     if (isNew) { book[k] = { n: res.n, e: res.e, t: b.t, first: !!res.first }; saveJSON('merge_book', book); }
-    if (res.first) {
+    if (b.t === MAX_TIER) {
+      wins++; saveJSON('merge_wins', wins);
+      banner = { kind: 'win', item: b.item, t: 0, life: 4.5 };
+      Sound.worldFirst(); gulp.wow = 3; shake = 12;
+      confetti(W / 2, 170, 90); confetti(W / 2, 500, 60);
+    } else if (b.t > prevMax && b.t >= 3) {
+      banner = { kind: 'level', item: b.item, level: b.t, t: 0, life: 2.4 };
+      Sound.worldFirst(); gulp.wow = 1.6;
+      confetti(W / 2, 170, 40);
+    } else if (res.first) {
       worldFirsts++; roundFirsts++; saveJSON('merge_firsts', worldFirsts);
       banner = { kind: 'world', item: b.item, t: 0, life: 3.2 };
       Sound.worldFirst(); gulp.wow = 2.2;
@@ -597,7 +666,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     // drop shadow
     g.fillStyle = 'rgba(43,34,51,0.18)';
     g.beginPath(); g.arc(0, 3, r, 0, Math.PI * 2); g.fill();
-    g.fillStyle = colorOf(item.n);
+    g.fillStyle = TIER_COLOR[t];
     g.beginPath(); g.arc(0, 0, r, 0, Math.PI * 2); g.fill();
     // soft shine
     g.fillStyle = 'rgba(255,255,255,0.45)';
@@ -618,6 +687,16 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       g.strokeText(item.n, 0, r * 0.56);
       g.fillStyle = INK; g.fillText(item.n, 0, r * 0.56);
     }
+    // level number badge
+    const br = Math.max(9, r * 0.2), bx = r * 0.7, by = -r * 0.7;
+    g.fillStyle = '#ffffff'; g.strokeStyle = INK; g.lineWidth = Math.max(2, br * 0.28);
+    g.beginPath(); g.arc(bx, by, br, 0, Math.PI * 2); g.fill(); g.stroke();
+    g.fillStyle = INK; g.font = `700 ${Math.round(br * 1.25)}px ${FONT}`;
+    g.fillText(String(t), bx, by + br * 0.06);
+    if (t === MAX_TIER) {   // the legendary level shines
+      g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.setLineDash([6, 8]);
+      g.beginPath(); g.arc(0, 0, r * 0.86, 0, Math.PI * 2); g.stroke(); g.setLineDash([]);
+    }
     s = { c, half: r + pad };
     sprites.set(key, s);
     return s;
@@ -625,6 +704,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 
   function drawBody(b) {
     const sx = 1 + b.wob, sy = 1 - b.wob;
+    if (state === 'play' && held && b.item && b.t === held.t) {
+      // "this one will fuse with what you are holding"
+      const a = 0.55 + 0.45 * Math.sin(clock * 8);
+      ctx.strokeStyle = `rgba(255,255,255,${a})`; ctx.lineWidth = 7;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r + 5, 0, Math.PI * 2); ctx.stroke();
+    }
     ctx.save();
     ctx.translate(b.x, b.y);
     if (state === 'burp') ctx.rotate(b.spin);
@@ -803,7 +888,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     }
     // discoveries
     text('📖', W - 92, 96, 20, INK, 500, 'center', EMOJI_FONT);
-    text(String(discoveredCount()), W - 74, 97, 20, INK, 700, 'left');
+    text(discoveredCount() + '/' + TOTAL_THINGS, W - 74, 97, 20, INK, 700, 'left');
     if (worldFirsts > 0) {
       text('🏆', W - 92, 126, 18, INK, 500, 'center', EMOJI_FONT);
       text(String(worldFirsts), W - 74, 127, 20, INK, 700, 'left');
@@ -826,20 +911,20 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       pill(W / 2, 162, Math.min(W - 40, measure(str, fs) + 36), 42, '#ffffff');
       text(str, W / 2, 163, fs, INK, 700);
     } else if (firstDrop) {
-      text('Same size things merge into something new', W / 2, 162, 20, 'rgba(43,34,51,0.7)', 500);
+      text('Same color = they fuse into something new!', W / 2, 162, 21, INK, 700);
     }
 
     // size ladder at the bottom: how big have you gone?
     const top = maxTierEver();
-    const y = 940, gap = 10, f = 18 / RADII[MAX_TIER];
-    const total = RADII.slice(1).reduce((sum, r) => sum + r * 2 * f, 0) + gap * (MAX_TIER - 1);
-    let x = (W - total) / 2;
+    // The level path: 1 to 10, the goal is the gold 10.
+    const y = 938, r = 16, gap = 8, total = MAX_TIER * r * 2 + (MAX_TIER - 1) * gap;
+    let x = (W - total) / 2 + r;
     for (let t = 1; t <= MAX_TIER; t++) {
-      const r = RADII[t] * f;
-      ctx.fillStyle = t <= top ? colorOf('tier' + t) : 'rgba(43,34,51,0.12)';
-      ctx.beginPath(); ctx.arc(x + r, y, r, 0, Math.PI * 2); ctx.fill();
-      ctx.lineWidth = 2.5; ctx.strokeStyle = t <= top ? INK : 'rgba(43,34,51,0.25)'; ctx.stroke();
-      if (t > top) text('?', x + r, y + 1, r * 1.1, 'rgba(43,34,51,0.35)', 700);
+      const got = t <= top;
+      ctx.fillStyle = got ? TIER_COLOR[t] : 'rgba(43,34,51,0.08)';
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = 3; ctx.strokeStyle = got ? INK : 'rgba(43,34,51,0.25)'; ctx.stroke();
+      text(t === MAX_TIER && !got ? '★' : String(t), x, y + 1, 16, got ? INK : 'rgba(43,34,51,0.4)', 700);
       x += r * 2 + gap;
     }
   }
@@ -871,8 +956,9 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.save();
     ctx.translate(W / 2, 168);
     ctx.scale(k * pop, k * pop);
-    const world = b.kind === 'world';
-    const label = world ? 'FIRST IN THE WORLD!' : 'NEW DISCOVERY';
+    const world = b.kind === 'world' || b.kind === 'win' || b.kind === 'level';
+    const label = b.kind === 'win' ? 'YOU WIN! LEVEL 10 LEGEND'
+      : b.kind === 'level' ? `LEVEL ${b.level} REACHED!` : world ? 'FIRST IN THE WORLD!' : 'NEW DISCOVERY';
     const str = b.item.e + ' ' + b.item.n;
     const fs = fitFont(str, 380, 34);
     const w = Math.max(measure(str, fs) + 70, 300);
@@ -916,7 +1002,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       text(bestMade.e, cx - w / 2 - 6, top + 290, 30, '#000', 500, 'center', EMOJI_FONT);
       text(str, cx + 18, top + 291, fs, INK, 700);
     }
-    const disc = roundFirsts > 0 ? `🏆 ${roundFirsts} world first${roundFirsts > 1 ? 's' : ''}` : `📖 ${discoveredCount()} things discovered`;
+    const disc = `Level ${bestMade ? bestMade.t : 1} of 10   ·   📖 ${discoveredCount()}/${TOTAL_THINGS} found`;
     text(disc, cx, top + 336, 19, INK, 500, 'center', `${FONT}, ${EMOJI_FONT}`);
     if (t > 1.9) {
       const p = 1 + Math.sin(clock * 5) * 0.04;
@@ -928,16 +1014,33 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.restore();
   }
 
+  // First screen: a tiny looping demo shows the one rule — same color fuses.
   function drawIntro() {
     if (!firstDrop || state !== 'play') return;
-    const a = 0.85 + Math.sin(clock * 3) * 0.15;
-    ctx.save(); ctx.globalAlpha = a;
-    text('MERGE', W / 2, 500, 72, INK, 700);
-    text('ANYTHING', W / 2, 566, 72, INK, 700);
-    ctx.restore();
-    text('Touch, slide, let go to drop', W / 2, 640, 22, 'rgba(43,34,51,0.75)', 500);
-    text('Can you make something', W / 2, 720, 22, INK, 700);
-    text('nobody in the world has made?', W / 2, 750, 22, INK, 700);
+    text('MERGE ANYTHING', W / 2, 410, fitFont('MERGE ANYTHING', JAR_R - JAR_L - 40, 52), INK, 700);
+    const T = (clock % 2.6) / 2.6;               // 0..1 loop
+    const y = 540, water = BASE[0], ocean = POOL[2][0];
+    const r1 = RADII[1] * 1.25, r2 = RADII[2] * 1.25;
+    const draw1 = (item, t, x, yy, r) => {
+      const sp = sprite(item, t), k = r / RADII[t];
+      ctx.drawImage(sp.c, x - sp.half * k, yy - sp.half * k, sp.half * 2 * k, sp.half * 2 * k);
+    };
+    if (T < 0.45) {
+      const d = 90 * (1 - T / 0.45) + r1;         // two blue ones slide together
+      draw1(water, 1, W / 2 - d, y, r1); draw1(water, 1, W / 2 + d, y, r1);
+    } else {
+      const p = Math.min(1, (T - 0.45) / 0.12);
+      const pop = p < 1 ? 0.6 + p * 0.5 : 1.1 - Math.min(0.1, (T - 0.57) * 0.6);
+      draw1(ocean, 2, W / 2, y, r2 * pop);
+      if (T < 0.62) { ctx.globalAlpha = 1 - (T - 0.45) / 0.17; ctx.strokeStyle = INK; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(W / 2, y, r2 * (1 + (T - 0.45) * 5), 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1; }
+    }
+    text('Same color = they fuse!', W / 2, 628, 30, INK, 700);
+    text('💧 + 💧 = 🌊', W / 2, 670, 26, INK, 500, 'center', `${FONT}, ${EMOJI_FONT}`);
+    text('Make bigger and bigger things.', W / 2, 726, 22, 'rgba(43,34,51,0.75)', 500);
+    text('Reach level 10 to WIN!', W / 2, 758, 24, '#ff4f7b', 700);
+    text('Don\'t let Gulp overflow!', W / 2, 792, 22, 'rgba(43,34,51,0.75)', 500);
+    text('Touch, slide, let go to drop', W / 2, 850, 20, 'rgba(43,34,51,0.6)', 500);
   }
 
   function draw() {
@@ -997,7 +1100,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 
   // Small hook for automated checks.
   window.__merge = { get bodies() { return bodies; }, get state() { return state; }, get score() { return score; },
-    drop(x) { aimX = x; dropHeld(); }, book: BOOK, RADII, DROP_ODDS,
+    drop(x) { aimX = x; dropHeld(); }, book: BOOK, RADII, DROP_ODDS, fuseResult, WORLD, POOL, TOTAL_THINGS,
     // Plays a round with random drops as fast as possible; returns how it went.
     async sim(maxDrops = 400) {
       newGame(); firstDrop = false; let drops = 0, time = 0;
