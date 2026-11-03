@@ -310,11 +310,43 @@
     let clip = null, clipRound = -1, recRound = -1;
     const MAX_MS = 12000;
     function supported() { return !!(window.MediaRecorder && canvas.captureStream); }
+    // MP4 plays everywhere (WhatsApp, Messenger, TikTok). Some browsers claim MP4 but write a file
+    // with no picture, so MP4 is used only after a half-second test recording proves it has video.
+    // Until then (or if the test fails) WebM is used.
+    const MP4 = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4;codecs=avc1', 'video/mp4'];
+    const WEBM = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+    const can = m => { try { return MediaRecorder.isTypeSupported(m); } catch (e) { return false; } };
+    let mp4Ok = false;
     function pickMime() {
-      // WebM first (Chrome/Android always encode it; TikTok accepts it). MP4 for iPhone Safari, which has no WebM recording.
-      const list = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4;codecs=avc1', 'video/mp4'];
-      return list.find(m => { try { return MediaRecorder.isTypeSupported(m); } catch (e) { return false; } }) || '';
+      const mp4 = MP4.find(can), webm = WEBM.find(can);
+      if (mp4 && (mp4Ok || !webm)) return mp4;   // iPhone has no WebM: MP4 is its only choice
+      return webm || mp4 || '';
     }
+    function testMp4() {
+      if (!supported()) return;
+      const mp4 = MP4.find(can);
+      if (!mp4 || !WEBM.find(can)) return;
+      let st;
+      try { st = canvas.captureStream(30); } catch (e) { return; }
+      const parts = [];
+      let r;
+      try { r = new MediaRecorder(st, { mimeType: mp4 }); } catch (e) { return; }
+      r.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
+      r.onstop = () => {
+        st.getTracks().forEach(tr => tr.stop());
+        if (!parts.length) return;
+        const v = document.createElement('video');
+        v.muted = true; v.preload = 'metadata';
+        const url = URL.createObjectURL(new Blob(parts, { type: 'video/mp4' }));
+        const done = ok => { mp4Ok = ok; URL.revokeObjectURL(url); v.removeAttribute('src'); };
+        v.onloadedmetadata = () => done(v.videoWidth > 0 && v.videoHeight > 0);
+        v.onerror = () => done(false);
+        v.src = url;
+      };
+      r.start(100);
+      setTimeout(() => { try { r.stop(); } catch (e) {} }, 700);
+    }
+    setTimeout(testMp4, 300);
     function start(roundId) {
       if (!supported()) return;
       stop();
@@ -360,7 +392,7 @@
       if (!!rec && recRound === roundId) { onReady = cb; stop(); }
       else if (finishing === roundId) { onReady = cb; }
     }
-    return { start, stop, tick, clipFor, recordingFor, finish, supported };
+    return { start, stop, tick, clipFor, recordingFor, finish, supported, format: () => pickMime() };
   })();
 
   // Inside claude.ai the page saves files through the viewer's downloads capability.
@@ -404,7 +436,9 @@
         .catch(err => { if (!err || err.code !== 'declined') showToast('Could not save the video'); });
       return;
     }
-    const shareFile = () => navigator.share({ files: [file], title: 'Cliff Edge', text: msg });
+    // Video only, no text: apps like Messenger keep the text and drop the video when both are sent.
+    // The game link is drawn inside the video instead.
+    const shareFile = () => navigator.share({ files: [file] });
     let why = 'no-share';
     if (navigator.share) {
       let ok = false;
@@ -873,6 +907,14 @@
     text(s.surface.name, W / 2, 86, 22, s.surface.top, 800);
 
     drawMuteIcon();
+
+    // Game link, always on screen so every recorded clip carries it.
+    ctx.font = '700 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(10,10,25,0.45)';
+    ctx.beginPath(); ctx.roundRect(W / 2 - 168, 930, 336, 26, 13); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText('▶ waeel1899464.github.io/cliff-edge', W / 2, 944);
 
     // Challenge banner
     const ch = CHALLENGES[level];
