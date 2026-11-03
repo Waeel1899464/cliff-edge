@@ -109,8 +109,13 @@
 
   // ---------- Input: one press, one release ----------
   let activePointer = null;
+  const MUTE_X = W - 44, MUTE_Y = 50;
   function press(e) {
     e.preventDefault();
+    Sound.init();
+    const rect = canvas.getBoundingClientRect();
+    const lx = (e.clientX - rect.left) / scale, ly = (e.clientY - rect.top) / scale;
+    if (Math.hypot(lx - MUTE_X, ly - MUTE_Y) < 34) { Sound.toggleMute(); return; }
     const now = performance.now();
     if (s.state === 'ready') {
       activePointer = e.pointerId;
@@ -137,6 +142,142 @@
   canvas.addEventListener('touchmove', block, { passive: false });
   canvas.addEventListener('touchend', block, { passive: false });
   window.addEventListener('contextmenu', block);
+
+  // ---------- Sound (all synthesized, no audio files) ----------
+  const Sound = (() => {
+    let ac = null, master = null, noiseBuf = null;
+    let eng = null, skid = null;
+    let muted = load('cliff_muted', 0) === 1;
+
+    function init() {
+      if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      try { ac = new AC(); } catch (e) { return; }
+      master = ac.createGain();
+      master.gain.value = muted ? 0 : 0.8;
+      // Limiter so overlapping sounds (scream + splash) never crackle.
+      const comp = ac.createDynamicsCompressor();
+      comp.threshold.value = -10; comp.knee.value = 6; comp.ratio.value = 12;
+      comp.attack.value = 0.003; comp.release.value = 0.15;
+      master.connect(comp); comp.connect(ac.destination);
+
+      noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+
+      // Engine: two detuned buzzy oscillators through a low-pass filter.
+      const o1 = ac.createOscillator(), o2 = ac.createOscillator();
+      o1.type = 'sawtooth'; o2.type = 'square';
+      const f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 700;
+      const g = ac.createGain(); g.gain.value = 0;
+      o1.connect(f); o2.connect(f); f.connect(g); g.connect(master);
+      o1.start(); o2.start();
+      eng = { o1, o2, f, g };
+
+      // Tire skid: looping noise through a band-pass filter.
+      const n = ac.createBufferSource(); n.buffer = noiseBuf; n.loop = true;
+      const bf = ac.createBiquadFilter(); bf.type = 'bandpass'; bf.frequency.value = 1800; bf.Q.value = 2;
+      const sg = ac.createGain(); sg.gain.value = 0;
+      n.connect(bf); bf.connect(sg); sg.connect(master); n.start();
+      skid = { bf, sg };
+    }
+
+    const SKID = { ROAD: { f: 1800, q: 2, vol: 0.22 }, ICE: { f: 3400, q: 9, vol: 0.16 }, MUD: { f: 380, q: 1, vol: 0.35 } };
+
+    function update(st) {
+      if (!ac) return;
+      const t = ac.currentTime;
+      const driving = st.state === 'holding';
+      const sliding = st.state === 'sliding';
+      const base = 42 + st.v * 16;
+      eng.o1.frequency.setTargetAtTime(base, t, 0.05);
+      eng.o2.frequency.setTargetAtTime(base * 0.502, t, 0.05);
+      eng.f.frequency.setTargetAtTime(500 + st.v * 140, t, 0.05);
+      const engVol = driving ? 0.13 : sliding ? 0.05 * Math.min(1, st.v / 3) : 0;
+      eng.g.gain.setTargetAtTime(engVol, t, driving ? 0.03 : 0.12);
+
+      const sk = SKID[st.surface.name];
+      skid.bf.frequency.setTargetAtTime(sk.f + st.v * 60, t, 0.05);
+      skid.bf.Q.value = sk.q;
+      const skVol = sliding && st.v > 0.2 ? sk.vol * Math.min(1, st.v / 5) : 0;
+      skid.sg.gain.setTargetAtTime(skVol, t, 0.05);
+    }
+
+    function env(gainNode, t, peak, attack, decay) {
+      gainNode.gain.setValueAtTime(0.0001, t);
+      gainNode.gain.exponentialRampToValueAtTime(peak, t + attack);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+    }
+
+    // Cartoon "AAAAH!": a buzzy voice with vowel formants, sliding down in pitch with wobble.
+    function scream() {
+      if (!ac) return;
+      const t = ac.currentTime;
+      const o = ac.createOscillator(); o.type = 'sawtooth';
+      o.frequency.setValueAtTime(620, t);
+      o.frequency.exponentialRampToValueAtTime(260, t + 1.4);
+      const lfo = ac.createOscillator(), lg = ac.createGain();
+      lfo.frequency.value = 7; lg.gain.value = 22;
+      lfo.connect(lg); lg.connect(o.frequency);
+      const out = ac.createGain();
+      [[800, 6, 1], [1150, 8, 0.6], [2800, 10, 0.25]].forEach(([fq, q, v]) => {
+        const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = fq; bp.Q.value = q;
+        const vg = ac.createGain(); vg.gain.value = v;
+        o.connect(bp); bp.connect(vg); vg.connect(out);
+      });
+      const g = ac.createGain(); out.connect(g); g.connect(master);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(1.4, t + 0.08);
+      g.gain.setValueAtTime(1.4, t + 1.0);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.5);
+      o.start(t); lfo.start(t); o.stop(t + 1.6); lfo.stop(t + 1.6);
+    }
+
+    function splash() {
+      if (!ac) return;
+      const t = ac.currentTime;
+      const n = ac.createBufferSource(); n.buffer = noiseBuf;
+      const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(4000, t);
+      lp.frequency.exponentialRampToValueAtTime(250, t + 0.7);
+      const g = ac.createGain(); env(g, t, 0.7, 0.01, 0.8);
+      n.connect(lp); lp.connect(g); g.connect(master); n.start(t); n.stop(t + 1);
+      // low "ploonk"
+      const o = ac.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.3);
+      const og = ac.createGain(); env(og, t, 0.6, 0.005, 0.35);
+      o.connect(og); og.connect(master); o.start(t); o.stop(t + 0.5);
+    }
+
+    function note(freq, when, dur, vol, type = 'sine') {
+      const t = ac.currentTime + when;
+      const o = ac.createOscillator(); o.type = type; o.frequency.value = freq;
+      const g = ac.createGain(); env(g, t, vol, 0.008, dur);
+      o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.05);
+    }
+
+    function ding()   { if (ac) { note(1319, 0, 0.6, 0.3); note(2637, 0, 0.4, 0.08); } }
+    function bloop()  { if (ac) { note(392, 0, 0.18, 0.18, 'triangle'); note(330, 0.09, 0.22, 0.15, 'triangle'); } }
+    function fanfare() {
+      if (!ac) return;
+      [523, 659, 784, 1047].forEach((f, i) => note(f, i * 0.09, i === 3 ? 0.7 : 0.18, 0.22, 'triangle'));
+      note(2093, 0.27, 0.5, 0.06);
+    }
+    function pop() { if (ac) note(rand(500, 800), 0, 0.08, 0.12, 'square'); }
+
+    function toggleMute() {
+      muted = !muted;
+      save('cliff_muted', muted ? 1 : 0);
+      if (master) master.gain.setTargetAtTime(muted ? 0 : 0.8, ac.currentTime, 0.02);
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (!ac) return;
+      if (document.hidden) ac.suspend(); else ac.resume();
+    });
+
+    return { init, update, scream, splash, ding, bloop, fanfare, pop, toggleMute, isMuted: () => muted };
+  })();
 
   // ---------- Helpers ----------
   const edgeM = EDGE_X / PPM;
@@ -179,6 +320,8 @@
     ];
     s.fallMsg = s.v < 1.5 ? 'SO CLOSE!' : ['NOOOO!', 'BYE BYE!', 'OOPS!', 'SPLASH!'][Math.floor(Math.random() * 4)];
     puff(EDGE_X, GROUND_Y, 10, s.surface.dust, 90, 160, 4, 0.6);
+    Sound.scream();
+    Sound.pop();
   }
 
   function updateFall(dt) {
@@ -217,7 +360,7 @@
         const big = p.kind === 'body';
         puff(p.x, WATER_Y, big ? 26 : 8, '#e8f6ff', big ? 140 : 60, big ? 420 : 220, big ? 6 : 4, 0.9);
         puff(p.x, WATER_Y, big ? 14 : 4, '#5fa8ff', big ? 110 : 50, big ? 320 : 160, big ? 5 : 3, 0.8);
-        if (big) { shake = 14; s.splashed = true; s.splashAt = s.fallT; }
+        if (big) { shake = 14; s.splashed = true; s.splashAt = s.fallT; Sound.splash(); }
       }
     }
     if (s.splashed && s.fallT - s.splashAt > 0.9) s.state = 'fell';
@@ -256,6 +399,9 @@
           puff(EDGE_X - 30, GROUND_Y - 40, 30, '#ffd23f', 160, 380, 5, 1.1);
           puff(EDGE_X - 30, GROUND_Y - 40, 20, '#ff4f7b', 160, 380, 4, 1.1);
         }
+        if (s.beat) Sound.fanfare();
+        else if (s.newBest || s.result < 10) Sound.ding();
+        else Sound.bloop();
       }
     } else if (s.state === 'falling' || s.state === 'fell') {
       updateFall(dt);
@@ -372,6 +518,24 @@
     ctx.restore();
   }
 
+  function drawMuteIcon() {
+    ctx.save();
+    ctx.translate(MUTE_X, MUTE_Y);
+    ctx.fillStyle = 'rgba(10,10,25,0.35)';
+    ctx.beginPath(); ctx.arc(0, 0, 22, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-10, -4); ctx.lineTo(-5, -4); ctx.lineTo(1, -10); ctx.lineTo(1, 10); ctx.lineTo(-5, 4); ctx.lineTo(-10, 4);
+    ctx.closePath(); ctx.fill();
+    if (Sound.isMuted()) {
+      ctx.beginPath(); ctx.moveTo(5, -5); ctx.lineTo(13, 5); ctx.moveTo(13, -5); ctx.lineTo(5, 5); ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.arc(3, 0, 6, -0.9, 0.9); ctx.stroke();
+      ctx.beginPath(); ctx.arc(3, 0, 11, -0.9, 0.9); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function drawParts() {
     for (const p of s.parts) {
       if (p.kind === 'wheel') { drawWheel(p.x, p.y, p.rot); continue; }
@@ -434,6 +598,8 @@
     text('BEST ' + (best === null ? '—' : fmt(best)), W / 2, 50, 24, '#ffffff', 700);
     text(s.surface.name, W / 2, 86, 22, s.surface.top, 800);
 
+    drawMuteIcon();
+
     // Challenge banner
     const ch = CHALLENGES[level];
     if (s.state !== 'stopped' || !s.beat) {
@@ -472,6 +638,7 @@
     const dt = Math.min(0.033, (now - last) / 1000);
     last = now;
     update(dt);
+    Sound.update(s);
     draw();
     requestAnimationFrame(frame);
   }
