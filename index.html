@@ -92,9 +92,11 @@
   ];
   let skin = SKINS[0];
 
-  // Endless run (like Flappy Bird's pipe count): clear cliff after cliff, each target smaller.
-  // Miss the target or fall and the run starts again from cliff 1. The score is cliffs in a row.
-  // Targets: 100, 78, 61, 47, 37, 29 ... 10, 8.3, 6.5 ... down to 1 cm, then 1 cm forever.
+  // Endless cliffs, each target smaller. Progress is never wiped:
+  //  - 3 hearts: a miss costs one heart and you retry the same cliff;
+  //  - a checkpoint every 5 cliffs (1, 6, 11, 16...): losing all hearts sends you back only to it;
+  //  - the current cliff is saved, so closing the game keeps your place.
+  // Score: the farthest cliff reached. Targets: 100, 78, 61, 47, 37, 29 ... 10, 8.3, 6.5 ... down to 1 cm, then 1 cm forever.
   function runTarget(n) {
     const v = 100 * Math.pow(0.78, n);
     if (v >= 10) return Math.round(v);
@@ -122,8 +124,16 @@
   function load(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : parseFloat(v); } catch (e) { return fallback; } }
   function save(key, v) { try { localStorage.setItem(key, String(v)); } catch (e) {} }
   let best = load('cliff_best', null);
-  let run = 0;                                  // cliffs cleared in the current run
-  let bestRun = load('cliff_bestrun', 0);       // the number players compete on
+  const HEARTS = 3, CP_EVERY = 5;
+  const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.floor(Number(v) || lo)));
+  let cliff = clampInt(load('cliff_cur', 1), 1, 100000);          // cliff being played
+  let checkpoint = clampInt(load('cliff_cp', 1), 1, cliff);       // where a lost life sends you back to
+  let hearts = clampInt(load('cliff_hearts', HEARTS), 1, HEARTS);
+  let bestCliff = clampInt(load('cliff_bestcliff', 1), cliff, 100000);   // the number players compete on
+  const isCheckpoint = n => (n - 1) % CP_EVERY === 0;
+  function saveProgress() {
+    save('cliff_cur', cliff); save('cliff_cp', checkpoint); save('cliff_hearts', hearts); save('cliff_bestcliff', bestCliff);
+  }
 
   // ---------- Round state ----------
   // states: ready -> holding -> sliding -> stopped | falling -> fell
@@ -167,7 +177,7 @@
       surface,
       params: { si, dist, vmax },
       friend: fr, friendTry: fr ? fr.tries : 0, friendWin: false,
-      cliff: run + 1, target: runTarget(run), cleared: false, runOver: false, runFinal: 0, newRun: false,
+      cliff, target: runTarget(cliff - 1), cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
       vmax,
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
       v: 0, a: 0,
@@ -674,10 +684,17 @@
   }
 
   // Break the car into pieces that tumble down the cliff.
-  function endRun() { s.runOver = true; s.runFinal = run; run = 0; }
+  // A missed cliff: lose a heart and retry it; with no hearts left, go back to the checkpoint.
+  function missCliff() {
+    s.missed = true;
+    hearts--;
+    if (hearts <= 0) { cliff = checkpoint; hearts = HEARTS; s.backTo = checkpoint; }
+    s.heartsLeft = hearts;
+    saveProgress();
+  }
 
   function startFall() {
-    if (!s.friend) endRun();
+    if (!s.friend) missCliff();
     s.state = 'falling';
     s.endAt = performance.now();
     s.fallT = 0;
@@ -771,12 +788,14 @@
         if (!s.friend) {
           if (s.result < s.target) {
             s.cleared = true;
-            run++;
-            if (run > bestRun) { bestRun = run; save('cliff_bestrun', bestRun); s.newRun = true; }
+            cliff++;
+            if (isCheckpoint(cliff)) { checkpoint = cliff; hearts = HEARTS; s.newCp = true; }
+            if (cliff > bestCliff) { bestCliff = cliff; s.newBestCliff = true; }
+            saveProgress();
             puff(EDGE_X - 30, GROUND_Y - 40, 30, '#ffd23f', 160, 380, 5, 1.1);
             puff(EDGE_X - 30, GROUND_Y - 40, 20, '#ff4f7b', 160, 380, 4, 1.1);
           } else {
-            endRun();
+            missCliff();
           }
         }
         if (s.cleared || s.friendWin) Sound.fanfare();
@@ -1009,6 +1028,24 @@
   function drawShareBtn() { drawButton(SHARE_BTN, 'SHARE CLIP', '#ffffff', '#12141f', 22, 'play'); }
   function drawChallengeBtn() { drawButton(CHALLENGE_BTN, 'CHALLENGE A FRIEND', '#ffd23f', '#12141f', 26, 'flag'); }
 
+  // Hearts row; `lost` also shows the spent hearts as empty outlines.
+  function drawHearts(cx, cy, n, lost) {
+    const total = HEARTS, gap = 40, x0 = cx - (total - 1) * gap / 2;
+    for (let i = 0; i < total; i++) {
+      const full = i < n;
+      ctx.save(); ctx.translate(x0 + i * gap, cy + 2); ctx.scale(1.6, 1.6);
+      ctx.beginPath();
+      ctx.moveTo(0, 6);
+      ctx.bezierCurveTo(-12, -2, -8, -12, 0, -6);
+      ctx.bezierCurveTo(8, -12, 12, -2, 0, 6);
+      ctx.closePath();
+      ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(10,10,25,0.75)'; ctx.stroke();
+      ctx.fillStyle = full ? '#ff4f7b' : 'rgba(255,255,255,0.18)';
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
   function drawMuteIcon() {
     ctx.save();
     ctx.translate(MUTE_X, MUTE_Y);
@@ -1086,7 +1123,7 @@
     ctx.restore();
 
     // HUD (screen space)
-    text('BEST RUN ' + bestRun, W / 2, 50, 24, '#ffffff', 800);
+    text('BEST CLIFF ' + bestCliff, W / 2, 50, 24, '#ffffff', 800);
     text(s.surface.name, W / 2, 86, 22, s.surface.top, 800);
 
     drawMuteIcon();
@@ -1100,21 +1137,27 @@
     ctx.fillText('▶ waeel1899464.github.io/cliff-edge', W / 2, 944);
 
     // Top banner: friend challenge, or the endless run
-    const plural = n => n + (n === 1 ? ' cliff' : ' cliffs');
     if (s.friend) {
       text(`FRIEND'S CHALLENGE · TRY ${s.friendTry}/${FRIEND_TRIES}`, W / 2, 150, 20, '#ffd23f', 800);
       text(s.friend.score === null ? 'YOUR FRIEND FELL OFF' : 'BEAT ' + fmt(s.friend.score), W / 2, 192, 38, '#ffffff', 900);
       text('Same cliff, same speed', W / 2, 232, 20, '#fff3c4', 600);
     } else if (s.cleared) {
-      text('CLIFF CLEARED!', W / 2, 150, 34, '#ffd23f', 900);
-      text(s.newRun ? `NEW RECORD: ${plural(run)} in a row` : `${plural(run)} in a row`, W / 2, 196, 24, s.newRun ? '#ffd23f' : '#fff3c4', 800);
-    } else if (s.runOver && (s.state === 'stopped' || s.state === 'fell' || s.splashed)) {
-      text('RUN OVER', W / 2, 150, 34, '#ff8fa8', 900);
-      text(`${plural(s.runFinal)} in a row · target was ${fmtTarget(s.target)}`, W / 2, 196, 22, '#fff3c4', 700);
+      text(s.newCp ? 'CHECKPOINT SAVED!' : 'CLIFF CLEARED!', W / 2, 150, 34, '#ffd23f', 900);
+      text(s.newCp ? `Hearts refilled · next: cliff ${cliff}` : `Next: cliff ${cliff}`, W / 2, 196, 22, '#fff3c4', 800);
+    } else if (s.missed && (s.state === 'stopped' || s.state === 'fell' || s.splashed)) {
+      if (s.backTo) {
+        text('NO HEARTS LEFT', W / 2, 150, 34, '#ff8fa8', 900);
+        text(`Back to checkpoint · cliff ${s.backTo}`, W / 2, 196, 22, '#fff3c4', 800);
+      } else {
+        text('MISSED!', W / 2, 150, 34, '#ff8fa8', 900);
+        drawHearts(W / 2, 198, s.heartsLeft, true);
+      }
     } else {
-      text(`CLIFF ${s.cliff}`, W / 2, 150, 20, '#ffd23f', 800);
-      text('STOP UNDER ' + fmtTarget(s.target), W / 2, 192, 38, '#ffffff', 900);
-      text(s.cliff === 1 ? 'Clear cliffs in a row. Each one is harder.' : `Best run: ${plural(bestRun)}`, W / 2, 232, 20, '#fff3c4', 600);
+      text(`CLIFF ${s.cliff}`, W / 2, 140, 20, '#ffd23f', 800);
+      text('STOP UNDER ' + fmtTarget(s.target), W / 2, 180, 38, '#ffffff', 900);
+      drawHearts(W / 2, 224, hearts, false);
+      const nextCp = Math.ceil(s.cliff / CP_EVERY) * CP_EVERY + 1;
+      text(s.cliff === 1 ? 'Each cliff is harder. Checkpoint every 5.' : `Checkpoint at cliff ${nextCp}`, W / 2, 262, 18, '#fff3c4', 600);
     }
 
     if (s.state === 'ready') {
@@ -1126,11 +1169,11 @@
       text(fmt(s.result), W / 2, 300, 76, '#ffffff');
       if (s.friend) text(s.friendWin ? 'YOU BEAT YOUR FRIEND!' : 'YOUR FRIEND WINS', W / 2, 358, 30, s.friendWin ? '#ffd23f' : '#fff3c4', 900);
       else text(s.newBest ? 'NEW BEST STOP!' : 'from the edge', W / 2, 358, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
-      text(s.friend ? 'TAP TO PLAY AGAIN' : s.cleared ? `TAP FOR CLIFF ${run + 1}` : 'TAP TO START A NEW RUN', W / 2, 900, 28, '#ffffff', 700);
+      text(s.friend ? 'TAP TO PLAY AGAIN' : s.cleared ? `TAP FOR CLIFF ${cliff}` : `TAP TO RETRY CLIFF ${cliff}`, W / 2, 900, 28, '#ffffff', 700);
     } else if (s.state === 'falling' || s.state === 'fell') {
       text(s.fallMsg, W / 2, 340, 64, '#ffffff');
       if (s.friend) text(s.friend.score === null ? 'YOU BOTH FELL!' : 'YOUR FRIEND WINS', W / 2, 400, 28, '#fff3c4', 900);
-      text(s.friend ? 'TAP TO TRY AGAIN' : 'TAP TO START A NEW RUN', W / 2, 900, 28, '#ffffff', 700);
+      text(s.friend ? 'TAP TO TRY AGAIN' : `TAP TO RETRY CLIFF ${cliff}`, W / 2, 900, 28, '#ffffff', 700);
     }
     if (shareVisible()) drawShareBtn();
     if (roundEnded()) drawChallengeBtn();
