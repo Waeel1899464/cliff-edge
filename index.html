@@ -35,18 +35,29 @@
   const PPM = 30;                    // pixels per meter (at zoom 1)
   const EDGE_X = 430;                // cliff edge, in logical pixels
   const GROUND_Y = 620;              // top of the cliff
+  const WATER_Y = H - 150;           // sea surface
   const CAR_LEN = 1.6;               // meters
+  const CAR_H = 26, WHEEL_R = 8;     // pixels
   const ACCEL = 7;                   // m/s² while holding
-  const GRAVITY = 30;                // m/s² when falling
+  const G_PX = 900;                  // gravity in px/s² for the fall
   const CAM_ANCHOR_X = W * 0.55;     // where the camera focus sits on screen
 
-  // Braking: deceleration = base + drag * speed.
-  // The drag part makes the car ease out smoothly instead of stopping dead.
-  // Stopping distance from 8 m/s: road ≈ 5 m, ice ≈ 10.5 m, mud ≈ 2.6 m.
+  // Braking: deceleration = base + drag * speed (smooth ease-out).
   const SURFACES = [
     { name: 'ROAD', base: 2.0, drag: 0.9,  top: '#6a6e84', side: '#3d4052', dust: '#c9cbd6' },
     { name: 'ICE',  base: 0.9, drag: 0.45, top: '#d4f1ff', side: '#7cc4e6', dust: '#ffffff' },
     { name: 'MUD',  base: 4.0, drag: 1.8,  top: '#8a5a33', side: '#5e3b1f', dust: '#a8774a' },
+  ];
+
+  // Challenge ladder. Percentages are first guesses; replace with real player data after testing.
+  const CHALLENGES = [
+    { cm: 100, fail: '50%' },
+    { cm: 50,  fail: '70%' },
+    { cm: 25,  fail: '85%' },
+    { cm: 10,  fail: '95%' },
+    { cm: 5,   fail: '99%' },
+    { cm: 2,   fail: '99.5%' },
+    { cm: 1,   fail: '99.9%' },
   ];
 
   const canvas = document.getElementById('game');
@@ -65,16 +76,18 @@
   window.addEventListener('resize', resize);
   resize();
 
-  // ---------- Saved best (optional, may be unavailable) ----------
-  let best = null;
-  try { const v = localStorage.getItem('cliff_best'); if (v !== null) best = parseFloat(v); } catch (e) {}
-  function saveBest(v) { try { localStorage.setItem('cliff_best', String(v)); } catch (e) {} }
+  // ---------- Saved progress (optional, may be unavailable) ----------
+  function load(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : parseFloat(v); } catch (e) { return fallback; } }
+  function save(key, v) { try { localStorage.setItem(key, String(v)); } catch (e) {} }
+  let best = load('cliff_best', null);
+  let level = Math.min(load('cliff_level', 0), CHALLENGES.length);   // index of current challenge
 
   // ---------- Round state ----------
   // states: ready -> holding -> sliding -> stopped | falling -> fell
   let s;
-  const cam = { z: 1, fx: CAM_ANCHOR_X };
+  const cam = { z: 1, fx: CAM_ANCHOR_X, fy: GROUND_Y };
   let particles = [];
+  let shake = 0;
 
   function newRound() {
     const surface = SURFACES[Math.floor(Math.random() * SURFACES.length)];
@@ -84,10 +97,11 @@
       surface,
       vmax: 6 + Math.random() * 3,
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
-      v: 0, a: 0, y: 0, vy: 0, rot: 0,
+      v: 0, a: 0,
       tilt: 0, tiltV: 0,                              // body pitch (spring)
-      result: null, newBest: false,
+      result: null, newBest: false, beat: false,
       endAt: 0,
+      parts: null, fallT: 0, splashed: false, fallMsg: '',
     };
     particles = [];
   }
@@ -104,7 +118,7 @@
       s.state = 'holding';
       return;
     }
-    if ((s.state === 'stopped' || s.state === 'fell' || s.state === 'falling') && now - s.endAt > 250) {
+    if ((s.state === 'stopped' || s.state === 'fell' || s.state === 'falling') && now - s.endAt > 300) {
       newRound();
     }
   }
@@ -118,32 +132,103 @@
   canvas.addEventListener('lostpointercapture', release);
   window.addEventListener('pointerup', release);
   window.addEventListener('pointercancel', release);
-  // Stop phones from treating a long press as text selection, zoom or scroll.
   const block = e => e.preventDefault();
   canvas.addEventListener('touchstart', block, { passive: false });
   canvas.addEventListener('touchmove', block, { passive: false });
   canvas.addEventListener('touchend', block, { passive: false });
   window.addEventListener('contextmenu', block);
 
-  // ---------- Update ----------
+  // ---------- Helpers ----------
   const edgeM = EDGE_X / PPM;
+  const rand = (a, b) => a + Math.random() * (b - a);
   function frontX() { return s.x + CAR_LEN; }
+
+  function puff(x, y, n, color, spread, up, size, life) {
+    for (let i = 0; i < n; i++) {
+      particles.push({ x, y, vx: rand(-spread, spread), vy: -rand(up * 0.4, up), life: rand(life * 0.6, life), t: 0, r: rand(size * 0.5, size), color, g: 500 });
+    }
+  }
 
   function spawnDust(n) {
     for (let i = 0; i < n; i++) {
       particles.push({
-        x: s.x * PPM + 8 + Math.random() * 6,
-        y: GROUND_Y - 2,
-        vx: -(20 + Math.random() * 40) + s.v * 6,
-        vy: -(15 + Math.random() * 45),
-        life: 0.45 + Math.random() * 0.3,
-        t: 0,
-        r: 2 + Math.random() * 3,
+        x: s.x * PPM + 8 + Math.random() * 6, y: GROUND_Y - 2,
+        vx: -(20 + Math.random() * 40) + s.v * 6, vy: -(15 + Math.random() * 45),
+        life: 0.45 + Math.random() * 0.3, t: 0, r: 2 + Math.random() * 3,
+        color: s.surface.dust, g: 80, grow: true,
       });
     }
   }
 
-  function update(dt) {
+  // Break the car into pieces that tumble down the cliff.
+  function startFall() {
+    s.state = 'falling';
+    s.endAt = performance.now();
+    s.fallT = 0;
+    const len = CAR_LEN * PPM;
+    const cx = s.x * PPM + len / 2;
+    const bodyY = GROUND_Y - WHEEL_R - CAR_H / 2 - 2;
+    const vx = Math.max(s.v, 1.4) * PPM;
+    s.parts = [
+      cx < EDGE_X + 12
+        // Slow: the body tips forward over the edge before it drops.
+        ? { kind: 'body', x: cx, y: bodyY, vx, vy: 0, rot: s.tilt, vrot: 1.5, r: 12, tipping: true }
+        : { kind: 'body', x: cx, y: bodyY, vx, vy: -60, rot: s.tilt, vrot: 3 + s.v * 0.5, r: 12 },
+      { kind: 'wheel', x: cx - len / 2 + 11, y: GROUND_Y - WHEEL_R, vx: vx + rand(-80, 40), vy: -rand(180, 320), rot: 0, vrot: rand(-14, 14), r: WHEEL_R },
+      { kind: 'wheel', x: cx + len / 2 - 11, y: GROUND_Y - WHEEL_R, vx: vx + rand(20, 140), vy: -rand(220, 380), rot: 0, vrot: rand(-14, 14), r: WHEEL_R },
+    ];
+    s.fallMsg = s.v < 1.5 ? 'SO CLOSE!' : ['NOOOO!', 'BYE BYE!', 'OOPS!', 'SPLASH!'][Math.floor(Math.random() * 4)];
+    puff(EDGE_X, GROUND_Y, 10, s.surface.dust, 90, 160, 4, 0.6);
+  }
+
+  function updateFall(dt) {
+    s.fallT += dt;
+    for (const p of s.parts) {
+      if (p.tipping) {
+        p.vx += 250 * dt; p.vrot += 10 * dt;
+        p.x += p.vx * dt; p.rot += p.vrot * dt;
+        p.y += p.vx * dt * Math.sin(Math.max(0, p.rot)) * 0.6;
+        if (p.x > EDGE_X + p.r) { p.tipping = false; p.vy = p.vx * Math.sin(Math.max(0, p.rot)); }
+        continue;
+      }
+      if (p.inWater) {
+        p.vx *= Math.pow(0.2, dt);
+        p.vy += (35 - p.vy) * Math.min(1, dt * 3);   // sink slowly
+        p.vrot *= Math.pow(0.3, dt);
+      } else {
+        p.vy += G_PX * dt;
+      }
+      const prevY = p.y;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vrot * dt;
+
+      // Bounce off the cliff top (wheels that hop backwards)
+      if (!p.inWater && p.kind === 'wheel' && p.x < EDGE_X && prevY + p.r <= GROUND_Y && p.y + p.r > GROUND_Y) {
+        p.y = GROUND_Y - p.r; p.vy = -Math.abs(p.vy) * 0.45; p.vx *= 0.7;
+      }
+      // Bounce off the cliff wall
+      if (!p.inWater && p.y + p.r > GROUND_Y && p.x - p.r < EDGE_X && prevY + p.r > GROUND_Y) {
+        p.x = EDGE_X + p.r; p.vx = Math.abs(p.vx) * 0.5 + 30; p.vrot *= -0.7;
+        puff(EDGE_X, p.y, 5, s.surface.dust, 60, 80, 3, 0.5);
+      }
+      // Hit the sea
+      if (!p.inWater && p.y > WATER_Y) {
+        p.inWater = true;
+        p.vy *= 0.15;
+        const big = p.kind === 'body';
+        puff(p.x, WATER_Y, big ? 26 : 8, '#e8f6ff', big ? 140 : 60, big ? 420 : 220, big ? 6 : 4, 0.9);
+        puff(p.x, WATER_Y, big ? 14 : 4, '#5fa8ff', big ? 110 : 50, big ? 320 : 160, big ? 5 : 3, 0.8);
+        if (big) { shake = 14; s.splashed = true; s.splashAt = s.fallT; }
+      }
+    }
+    if (s.splashed && s.fallT - s.splashAt > 0.9) s.state = 'fell';
+  }
+
+  // ---------- Update ----------
+  function update(rawDt) {
+    // Slow motion for the first moment of a fall: the dramatic part.
+    let dt = rawDt;
+    if (s.state === 'falling' && s.fallT < 0.45) dt = rawDt * 0.3;
+
     const prevV = s.v;
     if (s.state === 'holding') {
       s.v = Math.min(s.vmax, s.v + ACCEL * dt);
@@ -158,47 +243,55 @@
     if (s.state === 'holding' || s.state === 'sliding') {
       s.x += s.v * dt;
       if (frontX() > edgeM) {
-        s.state = 'falling';
-        s.endAt = performance.now();
+        startFall();
       } else if (s.state === 'sliding' && s.v === 0) {
         s.state = 'stopped';
         s.endAt = performance.now();
         s.result = (edgeM - frontX()) * 100;          // centimeters
-        if (best === null || s.result < best) { best = s.result; saveBest(best); s.newBest = true; }
+        if (best === null || s.result < best) { best = s.result; save('cliff_best', best); s.newBest = true; }
+        if (level < CHALLENGES.length && s.result < CHALLENGES[level].cm) {
+          s.beat = true;
+          s.beatCm = CHALLENGES[level].cm;
+          level++; save('cliff_level', level);
+          puff(EDGE_X - 30, GROUND_Y - 40, 30, '#ffd23f', 160, 380, 5, 1.1);
+          puff(EDGE_X - 30, GROUND_Y - 40, 20, '#ff4f7b', 160, 380, 4, 1.1);
+        }
       }
-    } else if (s.state === 'falling') {
-      s.x += s.v * dt;
-      s.vy += GRAVITY * dt;
-      s.y += s.vy * dt;
-      s.rot += (2 + s.v * 0.6) * dt;
+    } else if (s.state === 'falling' || s.state === 'fell') {
+      updateFall(dt);
     }
 
-    // Body pitch: nose up when speeding up, nose down when braking, then a springy settle.
+    // Body pitch spring
     const targetTilt = (s.state === 'holding' || s.state === 'sliding') ? -s.a * 0.012 : 0;
-    const k = 120, damp = 9;
-    s.tiltV += ((targetTilt - s.tilt) * k - s.tiltV * damp) * dt;
+    s.tiltV += ((targetTilt - s.tilt) * 120 - s.tiltV * 9) * dt;
     s.tilt += s.tiltV * dt;
 
-    // Dust
+    // Particles
     for (const p of particles) {
-      p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 80 * dt;
+      p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt;
     }
     particles = particles.filter(p => p.t < p.life);
+    shake *= Math.pow(0.02, rawDt);
 
-    // Camera: zoom in toward the edge as the car gets close, so the last centimeters are visible.
-    let zt = 1, ft = CAM_ANCHOR_X;
-    if (s.state === 'sliding' || s.state === 'stopped') {
+    // Camera: zoom toward the edge when close; pull back to show the fall.
+    let zt = 1, ft = CAM_ANCHOR_X, fyt = GROUND_Y;
+    if (s.parts) {
+      // Follow the falling body down to the splash, zoomed in.
+      const b = s.parts[0];
+      zt = 2;
+      ft = CAM_ANCHOR_X + (b.x - CAM_ANCHOR_X);
+      fyt = Math.min(b.y, WATER_Y - 40);
+    } else if (s.state === 'sliding' || s.state === 'stopped') {
       const d = edgeM - frontX();
       const near = Math.max(0, Math.min(1, 1 - d / 3));
       zt = 1 + 2.4 * near * near;
       const focus = (frontX() * PPM + EDGE_X) / 2;
       ft = CAM_ANCHOR_X + (focus - CAM_ANCHOR_X) * near;
-    } else if (s.state === 'falling' || s.state === 'fell') {
-      zt = cam.z; ft = cam.fx;                         // hold the shot while it falls
     }
-    const ease = 1 - Math.exp(-dt * 5);
+    const ease = 1 - Math.exp(-rawDt * (s.parts ? 6 : 5));
     cam.z += (zt - cam.z) * ease;
     cam.fx += (ft - cam.fx) * ease;
+    cam.fy += (fyt - cam.fy) * ease;
   }
 
   // ---------- Draw ----------
@@ -206,6 +299,7 @@
     if (cm < 100) return cm.toFixed(1) + ' cm';
     return (cm / 100).toFixed(2) + ' m';
   }
+  function fmtTarget(cm) { return cm >= 100 ? (cm / 100) + ' m' : cm + ' cm'; }
 
   function text(str, x, y, size, color, weight = 800) {
     ctx.font = `${weight} ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
@@ -219,45 +313,77 @@
     ctx.fillText(str, x, y);
   }
 
-  function drawCar() {
-    const len = CAR_LEN * PPM, h = 26, wheelR = 8;
-    const cx = s.x * PPM + len / 2;
-    const groundY = GROUND_Y + s.y * PPM;
-    const braking = s.state === 'sliding' && s.v > 0;
-
-    ctx.save();
-    ctx.translate(cx, groundY - wheelR);
-    ctx.rotate(s.rot);
-
-    // wheels (stay on the ground)
+  function drawWheel(x, y, rot) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
     ctx.fillStyle = '#1b1d2b';
-    ctx.beginPath(); ctx.arc(-len / 2 + 11, 0, wheelR, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(len / 2 - 11, 0, wheelR, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, WHEEL_R, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#8a8fa8';
+    ctx.fillRect(-1.5, -WHEEL_R + 2, 3, WHEEL_R - 2);
+    ctx.restore();
+  }
 
-    // body pitches on its suspension
-    ctx.rotate(s.tilt);
-    ctx.translate(0, -h / 2 - 2);
+  // Body centered on (0,0). mood: 'calm' | 'scared' | 'scream' | 'happy'
+  function drawBody(braking, mood) {
+    const len = CAR_LEN * PPM, h = CAR_H;
     ctx.fillStyle = '#ff4f7b';
     ctx.beginPath(); ctx.roundRect(-len / 2, -h / 2, len, h, 8); ctx.fill();
     ctx.fillStyle = '#ffd23f';
     ctx.beginPath(); ctx.roundRect(-len / 2 + 6, -h / 2 - 16, len * 0.5, 18, 6); ctx.fill();
-    // brake light
     ctx.fillStyle = braking ? '#ff1f3d' : '#7a2236';
     if (braking) { ctx.shadowColor = '#ff1f3d'; ctx.shadowBlur = 14; }
     ctx.beginPath(); ctx.roundRect(-len / 2 - 2, -h / 2 + 4, 5, 8, 2); ctx.fill();
     ctx.shadowBlur = 0;
-    // eye looks at the edge; widens when close
+
+    const ex = len / 2 - 10, ey = -3;
+    if (mood === 'happy') {
+      ctx.strokeStyle = '#12141f'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.arc(ex, ey + 3, 6, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+    } else {
+      const big = mood === 'scared' ? 9 : mood === 'scream' ? 11 : 7;
+      const pupil = mood === 'calm' ? 3.5 : 2.2;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(ex, ey, big, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#12141f';
+      const jx = mood === 'scream' ? rand(-2, 2) : 3, jy = mood === 'scream' ? rand(-2, 2) : 0;
+      ctx.beginPath(); ctx.arc(ex + jx, ey + jy, pupil, 0, Math.PI * 2); ctx.fill();
+    }
+    if (mood === 'scream' || mood === 'scared') {
+      ctx.fillStyle = '#5a0f22';
+      ctx.beginPath(); ctx.ellipse(len / 2 - 12, 8, mood === 'scream' ? 4 : 2.5, mood === 'scream' ? 5 : 2.5, 0, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  function drawCar() {
+    const len = CAR_LEN * PPM;
+    const cx = s.x * PPM + len / 2;
+    const braking = s.state === 'sliding' && s.v > 0;
     const d = edgeM - frontX();
-    const scared = (s.state === 'sliding' || s.state === 'stopped') && d < 1 && d >= 0;
-    ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(len / 2 - 10, -3, scared ? 9 : 7, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#12141f';
-    ctx.beginPath(); ctx.arc(len / 2 - 7, -3, scared ? 2.5 : 3.5, 0, Math.PI * 2); ctx.fill();
+    let mood = 'calm';
+    if (s.state === 'stopped' && s.result < 10) mood = 'happy';
+    else if ((s.state === 'sliding' || s.state === 'stopped') && d < 1) mood = 'scared';
+
+    ctx.save();
+    ctx.translate(cx, GROUND_Y - WHEEL_R);
+    drawWheel(-len / 2 + 11, 0, s.x * PPM / WHEEL_R);
+    drawWheel(len / 2 - 11, 0, s.x * PPM / WHEEL_R);
+    ctx.rotate(s.tilt);
+    ctx.translate(0, -CAR_H / 2 - 2);
+    drawBody(braking, mood);
     ctx.restore();
+  }
+
+  function drawParts() {
+    for (const p of s.parts) {
+      if (p.kind === 'wheel') { drawWheel(p.x, p.y, p.rot); continue; }
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      drawBody(false, 'scream');
+      ctx.restore();
+    }
   }
 
   function draw() {
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    if (shake > 0.3) ctx.translate(rand(-shake, shake), rand(-shake, shake));
 
     // sky (screen space)
     const g = ctx.createLinearGradient(0, 0, 0, H);
@@ -265,23 +391,20 @@
     g.addColorStop(0.6, '#ff7a59');
     g.addColorStop(1, '#ffb36b');
     ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
+    ctx.fillRect(-20, -20, W + 40, H + 40);
 
     // world (camera space)
     ctx.save();
     ctx.translate(CAM_ANCHOR_X, GROUND_Y);
     ctx.scale(cam.z, cam.z);
-    ctx.translate(-cam.fx, -GROUND_Y);
-
-    ctx.fillStyle = '#1f3d7a';
-    ctx.fillRect(-2000, H - 150, 6000, 3000);
+    ctx.translate(-cam.fx, -cam.fy);
 
     ctx.fillStyle = s.surface.side;
     ctx.fillRect(-2000, GROUND_Y + 14, EDGE_X + 2000, 3000);
     ctx.fillStyle = s.surface.top;
     ctx.fillRect(-2000, GROUND_Y, EDGE_X + 2000, 14);
 
-    // edge flag
+    // edge flag (points out over the drop)
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(EDGE_X - 3, GROUND_Y - 30, 3, 30);
     ctx.fillStyle = '#ff3355';
@@ -291,33 +414,55 @@
     ctx.lineTo(EDGE_X - 3, GROUND_Y - 18);
     ctx.fill();
 
-    // dust
-    ctx.fillStyle = s.surface.dust;
+    if (s.parts) drawParts(); else drawCar();
+
+    // sea drawn over the pieces so sinking parts look underwater
+    ctx.fillStyle = 'rgba(31,61,122,0.92)';
+    ctx.fillRect(-2000, WATER_Y, 6000, 3000);
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillRect(-2000, WATER_Y, 6000, 3);
+
     for (const p of particles) {
-      ctx.globalAlpha = 0.7 * (1 - p.t / p.life);
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (1 + p.t * 2), 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.8 * (1 - p.t / p.life);
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.grow ? p.r * (1 + p.t * 2) : p.r, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = 1;
-
-    drawCar();
     ctx.restore();
 
     // HUD (screen space)
-    text('BEST ' + (best === null ? '—' : fmt(best)), W / 2, 60, 26, '#ffffff', 700);
-    text(s.surface.name, W / 2, 100, 24, s.surface.top, 800);
+    text('BEST ' + (best === null ? '—' : fmt(best)), W / 2, 50, 24, '#ffffff', 700);
+    text(s.surface.name, W / 2, 86, 22, s.surface.top, 800);
+
+    // Challenge banner
+    const ch = CHALLENGES[level];
+    if (s.state !== 'stopped' || !s.beat) {
+      if (ch) {
+        text(`CHALLENGE ${level + 1}/${CHALLENGES.length}`, W / 2, 150, 20, '#ffd23f', 800);
+        text('STOP UNDER ' + fmtTarget(ch.cm), W / 2, 192, 38, '#ffffff', 900);
+        text(`${ch.fail} of players can't`, W / 2, 232, 20, '#fff3c4', 600);
+      } else {
+        text('ALL CHALLENGES DONE', W / 2, 150, 20, '#ffd23f', 800);
+        text('CHASE 0.0 cm', W / 2, 192, 38, '#ffffff', 900);
+      }
+    }
 
     if (s.state === 'ready') {
-      text('HOLD TO DRIVE', W / 2, 260, 44, '#ffffff');
-      text('Release to stop at the edge', W / 2, 315, 24, '#fff3c4', 600);
+      text('HOLD TO DRIVE', W / 2, 360, 44, '#ffffff');
+      text('Release to stop at the edge', W / 2, 410, 24, '#fff3c4', 600);
     } else if (s.state === 'sliding') {
-      text(fmt(Math.max(0, (edgeM - frontX()) * 100)), W / 2, 250, 52, 'rgba(255,255,255,0.9)');
+      text(fmt(Math.max(0, (edgeM - frontX()) * 100)), W / 2, 340, 52, 'rgba(255,255,255,0.9)');
     } else if (s.state === 'stopped') {
-      text(fmt(s.result), W / 2, 250, 76, '#ffffff');
-      text(s.newBest ? 'NEW BEST!' : 'from the edge', W / 2, 320, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
-      text('TAP TO PLAY AGAIN', W / 2, 860, 30, '#ffffff', 700);
+      if (s.beat) {
+        text('CHALLENGE COMPLETE!', W / 2, 160, 34, '#ffd23f', 900);
+        text('Under ' + fmtTarget(s.beatCm), W / 2, 205, 24, '#fff3c4', 700);
+      }
+      text(fmt(s.result), W / 2, 330, 76, '#ffffff');
+      text(s.newBest ? 'NEW BEST!' : 'from the edge', W / 2, 395, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
+      text(s.beat && CHALLENGES[level] ? 'TAP FOR NEXT CHALLENGE' : 'TAP TO PLAY AGAIN', W / 2, 900, 28, '#ffffff', 700);
     } else if (s.state === 'falling' || s.state === 'fell') {
-      text('YOU FELL!', W / 2, 260, 64, '#ffffff');
-      text('TAP TO TRY AGAIN', W / 2, 860, 30, '#ffffff', 700);
+      text(s.fallMsg, W / 2, 340, 64, '#ffffff');
+      text('TAP TO TRY AGAIN', W / 2, 900, 28, '#ffffff', 700);
     }
   }
 
