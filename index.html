@@ -161,8 +161,12 @@
   resize();
 
   // ---------- Saved progress (optional, may be unavailable) ----------
-  function load(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : parseFloat(v); } catch (e) { return fallback; } }
-  function save(key, v) { try { localStorage.setItem(key, String(v)); } catch (e) {} }
+  // Storage keys: the platform build saves under its own names (cg_ prefix), so the preview on the
+  // same website never reads or changes the web version's saved progress. The web build keeps the
+  // original names unchanged. No data is moved or deleted.
+  function storeKey(key) { return IS_PORTAL ? 'cg_' + key : key; }
+  function load(key, fallback) { try { const v = localStorage.getItem(storeKey(key)); return v === null ? fallback : parseFloat(v); } catch (e) { return fallback; } }
+  function save(key, v) { try { localStorage.setItem(storeKey(key), String(v)); } catch (e) {} }
   let best = load('cliff_best', null);
   const HEARTS = 3, CP_EVERY = 5;
   const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.floor(Number(v) || lo)));
@@ -204,8 +208,8 @@
   // ---- Daily challenge: one cliff for the whole world each day (UTC), 3 tries, plus a day streak ----
   const DAILY_TRIES = 3;
   const dayKey = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 10);   // e.g. 2026-11-03
-  function loadJSON(key) { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; } }
-  function saveJSON(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
+  function loadJSON(key) { try { return JSON.parse(localStorage.getItem(storeKey(key)) || 'null'); } catch (e) { return null; } }
+  function saveJSON(key, v) { try { localStorage.setItem(storeKey(key), JSON.stringify(v)); } catch (e) {} }
   function getDaily() {
     let d = loadJSON('cliff_daily');
     if (!d || d.day !== dayKey()) d = { day: dayKey(), tries: 0, best: null };
@@ -261,7 +265,7 @@
     const on = !IS_PORTAL && (location.hostname === 'waeel1899464.github.io' || /[?&]track=1/.test(location.search));
     const rid = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
     let device = null;
-    try { device = localStorage.getItem('cliff_dev'); if (!device) { device = rid(); localStorage.setItem('cliff_dev', device); } } catch (e) {}
+    try { device = localStorage.getItem(storeKey('cliff_dev')); if (!device) { device = rid(); localStorage.setItem(storeKey('cliff_dev'), device); } } catch (e) {}
     if (!device) device = rid();
     const session = rid();
     function send(event, value = null) {
