@@ -4,6 +4,47 @@
 # the public version needs that frame (doctype, phone viewport, share preview tags) added here.
 set -e
 cd "$(dirname "$0")"
+TARGET="${1:-web}"
+
+# ---------------------------------------------------------------------------
+# Platform build (CrazyGames): ./build.sh crazygames -> platform/crazygames/index.html
+# Same game source. The line `window.CLIFF_BUILD = 'crazygames'` switches off what platforms
+# do not allow (external links, clip sharing, friend challenge links, event tracking).
+# The web version on GitHub Pages is NOT touched by this target.
+# ---------------------------------------------------------------------------
+if [ "$TARGET" = "crazygames" ]; then
+  mkdir -p platform/crazygames
+  {
+  cat <<'HEAD'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#12141f">
+<title>Cliff Edge</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+[hidden]{display:none!important}
+</style>
+<script>window.CLIFF_BUILD = 'crazygames';</script>
+</head>
+<body>
+HEAD
+  cat index.html
+  printf '\n</body>\n</html>\n'
+  } > platform/crazygames/index.html
+  echo "built platform/crazygames/index.html"
+  exit 0
+fi
+
+if [ "$TARGET" != "web" ]; then echo "unknown target: $TARGET (use: web | crazygames)"; exit 1; fi
+
+# ---------------------------------------------------------------------------
+# Web build (GitHub Pages): ./build.sh  or  ./build.sh web  -> docs/index.html
+# ---------------------------------------------------------------------------
 mkdir -p docs
 {
 cat <<'HEAD'

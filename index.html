@@ -67,6 +67,13 @@
 
 <script>
 (() => {
+  // ---------- Build ----------
+  // 'web' = the public GitHub Pages version (all features).
+  // 'crazygames' = platform version, set by build.sh: no external links, no clip sharing,
+  // no friend-challenge links, no event tracking. Original features stay in the code.
+  const BUILD = window.CLIFF_BUILD === 'crazygames' ? 'crazygames' : 'web';
+  const IS_PORTAL = BUILD !== 'web';
+
   // ---------- Setup ----------
   const W = 540, H = 960;            // logical size (9:16)
   const PPM = 30;                    // pixels per meter (at zoom 1)

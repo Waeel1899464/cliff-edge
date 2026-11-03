@@ -1,0 +1,1436 @@
+<title>Cliff Edge</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: one 9:16 game canvas, centered and letterboxed on any screen. Single dark arcade look by choice. */
+  :root {
+    --bg: #12141f;
+    --fg: #f4f1ff;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    overflow: hidden;
+    padding-left: max(0px, env(safe-area-inset-left, 0px));
+    padding-right: max(0px, env(safe-area-inset-right, 0px));
+    display: flex; align-items: center; justify-content: center;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    overscroll-behavior: none;
+  }
+  canvas {
+    display: block;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+  /* Share panel shown when the browser has no share menu (in-app browsers). */
+  .sheet {
+    position: fixed; inset: 0; z-index: 20;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(8, 9, 20, 0.72);
+    padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .sheet-card {
+    width: 100%; max-width: 360px;
+    background: #1d2033; color: #f4f1ff;
+    border-radius: 22px; padding: 22px 20px 16px;
+    display: flex; flex-direction: column; gap: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  }
+  .sheet-card h2 { margin: 0; font-size: 22px; font-weight: 900; text-wrap: balance; }
+  .sheet-card p { margin: 0 0 4px; font-size: 15px; line-height: 1.45; color: #cfd0e6; }
+  .sheet-actions { display: flex; flex-direction: column; gap: 10px; }
+  .sheet-btn {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 52px; padding: 0 16px; border-radius: 26px; border: 0;
+    font: 800 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    text-decoration: none; cursor: pointer;
+    background: #2c3050; color: #ffffff;
+  }
+  .sheet-btn.primary { background: #ffd23f; color: #12141f; }
+  .sheet-btn.ghost { background: transparent; color: #a9abc8; min-height: 44px; }
+  .sheet-btn:focus-visible { outline: 3px solid #7ef9ff; outline-offset: 2px; }
+</style>
+
+<div id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+  <div class="sheet-card">
+    <h2 id="sheet-title"></h2>
+    <p id="sheet-text"></p>
+    <div id="sheet-actions" class="sheet-actions"></div>
+    <button id="sheet-close" class="sheet-btn ghost" type="button">Close</button>
+  </div>
+</div>
+
+<canvas id="game" aria-label="Cliff Edge game. Press and hold to drive, release to stop as close to the edge as you can."></canvas>
+
+<script>
+(() => {
+  // ---------- Setup ----------
+  const W = 540, H = 960;            // logical size (9:16)
+  const PPM = 30;                    // pixels per meter (at zoom 1)
+  const EDGE_X = 430;                // cliff edge, in logical pixels
+  const GROUND_Y = 620;              // top of the cliff
+  const WATER_Y = H - 150;           // sea surface
+  const CAR_LEN = 1.6;               // meters
+  const CAR_H = 26, WHEEL_R = 8;     // pixels
+  const ACCEL = 7;                   // m/s² while holding
+  const G_PX = 900;                  // gravity in px/s² for the fall
+  const CAM_ANCHOR_X = W * 0.55;     // where the camera focus sits on screen
+
+  // Braking: deceleration = base + drag * speed (smooth ease-out).
+  const SURFACES = [
+    { name: 'ROAD', base: 2.0, drag: 0.9,  top: '#6a6e84', side: '#3d4052', dust: '#c9cbd6' },
+    { name: 'ICE',  base: 0.9, drag: 0.45, top: '#d4f1ff', side: '#7cc4e6', dust: '#ffffff' },
+    { name: 'MUD',  base: 4.0, drag: 1.8,  top: '#8a5a33', side: '#5e3b1f', dust: '#a8774a' },
+  ];
+
+  // Character looks. Only one for now; later these become cosmetic items (never affect score).
+  const SKINS = [
+    { id: 'pinky', name: 'Pinky', body: '#ff4f7b', shade: '#d93a64', roof: '#ffd23f', ball: '#7ef9ff' },
+  ];
+  let skin = SKINS[0];
+
+  // Endless cliffs, each target smaller. Progress is never wiped:
+  //  - 3 hearts: a miss costs one heart and you retry the same cliff;
+  //  - a checkpoint every 5 cliffs (1, 6, 11, 16...): losing all hearts sends you back only to it;
+  //  - the current cliff is saved, so closing the game keeps your place.
+  // Score: the farthest cliff reached. Targets: 100, 78, 61, 47, 37, 29 ... 10, 8.3, 6.5 ... down to 1 cm, then 1 cm forever.
+  function runTarget(n) {
+    const v = 100 * Math.pow(0.78, n);
+    if (v >= 10) return Math.round(v);
+    return Math.max(1, Math.round(v * 10) / 10);
+  }
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  let scale = 1, dpr = 1;
+
+  function resize() {
+    const vw = document.body.clientWidth, vh = document.body.clientHeight;
+    scale = Math.min(vw / W, vh / H);
+    // Cap the drawing size at 1080x1920 (TikTok's standard): sharp, but light for phones and clip recording.
+    dpr = Math.min(window.devicePixelRatio || 1, 1080 / (W * scale));
+    canvas.style.width = (W * scale) + 'px';
+    canvas.style.height = (H * scale) + 'px';
+    canvas.width = Math.round(W * scale * dpr);
+    canvas.height = Math.round(H * scale * dpr);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- Saved progress (optional, may be unavailable) ----------
+  function load(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : parseFloat(v); } catch (e) { return fallback; } }
+  function save(key, v) { try { localStorage.setItem(key, String(v)); } catch (e) {} }
+  let best = load('cliff_best', null);
+  const HEARTS = 3, CP_EVERY = 5;
+  const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.floor(Number(v) || lo)));
+  let cliff = clampInt(load('cliff_cur', 1), 1, 100000);          // cliff being played
+  let checkpoint = clampInt(load('cliff_cp', 1), 1, cliff);       // where a lost life sends you back to
+  let hearts = clampInt(load('cliff_hearts', HEARTS), 1, HEARTS);
+  let roundsPlayed = clampInt(load('cliff_rounds', 0), 0, 1e9);
+  let bestCliff = clampInt(load('cliff_bestcliff', 1), cliff, 100000);   // the number players compete on
+  const isCheckpoint = n => (n - 1) % CP_EVERY === 0;
+  function saveProgress() {
+    save('cliff_cur', cliff); save('cliff_cp', checkpoint); save('cliff_hearts', hearts); save('cliff_bestcliff', bestCliff);
+  }
+
+  // ---------- Round state ----------
+  // states: ready -> holding -> sliding -> stopped | falling -> fell
+  let s;
+  const cam = { z: 1, fx: CAM_ANCHOR_X, fy: GROUND_Y };
+  let particles = [];
+  let shake = 0;
+
+  let roundCounter = 0;
+  // A friend's challenge link (?c=surface-distance-speed&s=score) replays the exact same cliff.
+  // Values come from a link anyone can edit, so each is checked against the normal ranges.
+  const FRIEND_TRIES = 3;
+  let friend = null;
+  try {
+    const q = new URLSearchParams(location.search);
+    const c = (q.get('c') || '').split('-').map(Number);
+    const sc = q.get('s');
+    if (c.length === 3 && c.every(Number.isInteger)) {
+      const si = c[0], dist = c[1] / 1000, vmax = c[2] / 1000;
+      const score = sc === 'x' ? null : Number(sc) / 10;
+      const okRound = si >= 0 && si < SURFACES.length && dist >= 8 && dist <= 13 && vmax >= 6 && vmax <= 9;
+      const okScore = sc === 'x' || (sc !== null && Number.isFinite(score) && score >= 0 && score <= 1300);
+      if (okRound && okScore) friend = { si, dist, vmax, score, tries: 0, won: false };
+    }
+  } catch (e) {}
+
+  // ---- Daily challenge: one cliff for the whole world each day (UTC), 3 tries, plus a day streak ----
+  const DAILY_TRIES = 3;
+  const dayKey = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 10);   // e.g. 2026-11-03
+  function loadJSON(key) { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; } }
+  function saveJSON(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
+  function getDaily() {
+    let d = loadJSON('cliff_daily');
+    if (!d || d.day !== dayKey()) d = { day: dayKey(), tries: 0, best: null };
+    return d;
+  }
+  function dailyLeft() { return DAILY_TRIES - getDaily().tries; }
+  function getStreak() {
+    const st = loadJSON('cliff_streak');
+    if (!st) return 0;
+    // A streak survives today and yesterday; any older and it has been broken.
+    return (st.last === dayKey() || st.last === dayKey(Date.now() - 864e5)) ? (st.count | 0) : 0;
+  }
+  function markStreak() {
+    const st = loadJSON('cliff_streak') || { last: '', count: 0 };
+    if (st.last === dayKey()) return;
+    st.count = st.last === dayKey(Date.now() - 864e5) ? (st.count | 0) + 1 : 1;
+    st.last = dayKey();
+    saveJSON('cliff_streak', st);
+  }
+  // Same numbers for everyone on the same date: a small seeded random generator.
+  // Assist (default): ruler on the cliff, live distance while holding, fixed layout per cliff,
+  // and a ghost of your previous try on the same cliff. Add ?classic=1 to the link for the old version.
+  const ASSIST = !new URLSearchParams(location.search).has('classic');
+  let lastTry = null;   // { key, release, stop } in meters (car front), from the previous try
+
+  function dailyParams() { return seededParams('cliff-edge-' + dayKey()); }
+  function seededParams(key) {
+    let h = 2166136261;
+    for (const ch of key) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+    let a = h >>> 0;
+    const r = () => { a = (a + 0x6D2B79F5) >>> 0; let x = a; x = Math.imul(x ^ (x >>> 15), x | 1); x ^= x + Math.imul(x ^ (x >>> 7), x | 61); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
+    return {
+      si: Math.floor(r() * SURFACES.length),
+      dist: Math.round((8 + r() * 5) * 1000) / 1000,
+      vmax: Math.round((6 + r() * 3) * 1000) / 1000,
+    };
+  }
+  function nextDailyIn() {
+    const now = new Date();
+    const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+    const sec = Math.max(0, Math.floor((next - now.getTime()) / 1000));
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(Math.floor(sec / 3600))}:${pad(Math.floor(sec / 60) % 60)}:${pad(sec % 60)}`;
+  }
+  let mode = 'run';   // 'run' = endless cliffs, 'daily' = today's challenge
+
+  // ---- Playtest metrics: anonymous events only (no names, emails or personal data) ----
+  // Sent only from the public site. The key is Supabase's public "publishable" key, made for web pages;
+  // the table accepts new rows only, so nobody can read or change the data with it.
+  const Track = (() => {
+    const URL_ = 'https://twgbgjwweanifxngkzrd.supabase.co/rest/v1/events';
+    const KEY = 'sb_publishable_fRMxd1l7QJ0Rj5Tvysw1jg_I60GWXjT';
+    const on = location.hostname === 'waeel1899464.github.io' || /[?&]track=1/.test(location.search);
+    const rid = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
+    let device = null;
+    try { device = localStorage.getItem('cliff_dev'); if (!device) { device = rid(); localStorage.setItem('cliff_dev', device); } } catch (e) {}
+    if (!device) device = rid();
+    const session = rid();
+    function send(event, value = null) {
+      if (!on) return;
+      try {
+        fetch(URL_, {
+          method: 'POST', keepalive: true,
+          headers: { 'apikey': KEY, 'Authorization': 'Bearer ' + KEY, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+          body: JSON.stringify({ device, session, event, value }),
+        }).catch(() => {});
+      } catch (e) {}
+    }
+    return { send };
+  })();
+
+  function newRound() {
+    // Rounded to the millimetre so a challenge link reproduces the round exactly.
+    let si = Math.floor(Math.random() * SURFACES.length);
+    let dist = Math.round((8 + Math.random() * 5) * 1000) / 1000;   // meters from car front to edge
+    let vmax = Math.round((6 + Math.random() * 3) * 1000) / 1000;
+    let fr = null, daily = false;
+    if (friend && !friend.won && friend.tries < FRIEND_TRIES) {
+      friend.tries++;
+      fr = friend; si = fr.si; dist = fr.dist; vmax = fr.vmax;
+    } else if (mode === 'daily' && dailyLeft() > 0) {
+      daily = true;
+      ({ si, dist, vmax } = dailyParams());
+    } else {
+      mode = 'run';
+      if (ASSIST) ({ si, dist, vmax } = seededParams('cliff-' + cliff));   // cliff 7 is the same cliff every time
+    }
+    const surface = SURFACES[si];
+    const layoutKey = fr ? 'friend' : daily ? 'daily-' + dayKey() : 'cliff-' + cliff + (ASSIST ? '' : '-' + roundCounter);
+    s = {
+      id: ++roundCounter,
+      state: 'ready',
+      surface,
+      params: { si, dist, vmax },
+      friend: fr, friendTry: fr ? fr.tries : 0, friendWin: false,
+      daily, dailyTry: 0, newDailyBest: false, layoutKey, releaseFront: null,
+      cliff, target: runTarget(cliff - 1), cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
+      vmax,
+      x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
+      v: 0, a: 0,
+      tilt: 0, tiltV: 0,                              // body pitch (spring)
+      eyeX: 1.5, eyeV: 0, eyeY: 0, eyeYV: 0, ant: 0, antV: 0, sq: 0, sqV: 0,
+      result: null, newBest: false, beat: false,
+      endAt: 0,
+      parts: null, fallT: 0, splashed: false, fallMsg: '',
+    };
+    particles = [];
+  }
+  newRound();
+  Track.send(friend ? 'challenge_open' : 'open', roundsPlayed);
+
+  // ---------- Input: one press, one release ----------
+  let activePointer = null;
+  const MUTE_X = W - 44, MUTE_Y = 50;
+  function press(e) {
+    e.preventDefault();
+    Sound.init();
+    const rect = canvas.getBoundingClientRect();
+    const lx = (e.clientX - rect.left) / scale, ly = (e.clientY - rect.top) / scale;
+    if (Math.hypot(lx - MUTE_X, ly - MUTE_Y) < 34) { Sound.toggleMute(); return; }
+    if (roundEnded() && inBtn(CHALLENGE_BTN, lx, ly)) { pendingChallenge = true; return; }
+    if (shareVisible() && inShareBtn(lx, ly)) { pendingShare = true; return; }
+    if (pillVisible() && inBtn(DAILY_PILL, lx, ly + 0)) { toggleDaily(); return; }
+    const now = performance.now();
+    if (s.state === 'ready') {
+      if (s.daily) {
+        const d = getDaily(); d.tries++; saveJSON('cliff_daily', d);
+        s.dailyTry = d.tries;
+        markStreak();
+      }
+      activePointer = e.pointerId;
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+      s.state = 'holding';
+      roundsPlayed++; save('cliff_rounds', roundsPlayed);
+      Track.send(s.daily ? 'daily' : 'round', s.daily ? s.dailyTry : s.cliff);
+      Rec.start(s.id);
+      return;
+    }
+    if ((s.state === 'stopped' || s.state === 'fell' || s.state === 'falling') && now - s.endAt > 300) {
+      newRound();
+    }
+  }
+  function release(e) {
+    Sound.init();   // phones only unlock audio on a finger lift
+    if (pendingChallenge) { pendingChallenge = false; doChallenge(); return; }
+    if (pendingShare) { pendingShare = false; doShare(); return; }
+    if (activePointer !== null && e.pointerId !== activePointer) return;
+    activePointer = null;
+    if (s.state === 'holding') { s.state = 'sliding'; s.releaseFront = frontX(); }
+  }
+  canvas.addEventListener('pointerdown', press);
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('lostpointercapture', release);
+  window.addEventListener('pointerup', release);
+  window.addEventListener('pointercancel', release);
+  const block = e => e.preventDefault();
+  canvas.addEventListener('touchstart', block, { passive: false });
+  canvas.addEventListener('touchmove', block, { passive: false });
+  canvas.addEventListener('touchend', block, { passive: false });
+  window.addEventListener('contextmenu', block);
+
+  // ---------- Sound (all synthesized, no audio files) ----------
+  const Sound = (() => {
+    let ac = null, master = null, noiseBuf = null;
+    let eng = null, skid = null;
+    let muted = load('cliff_muted', 0) === 1;
+    let compNode = null, recDest = null;
+
+    function init() {
+      if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      try { ac = new AC(); } catch (e) { return; }
+      master = ac.createGain();
+      master.gain.value = muted ? 0 : 0.8;
+      // Limiter so overlapping sounds (scream + splash) never crackle.
+      const comp = ac.createDynamicsCompressor();
+      comp.threshold.value = -10; comp.knee.value = 6; comp.ratio.value = 12;
+      comp.attack.value = 0.003; comp.release.value = 0.15;
+      master.connect(comp); comp.connect(ac.destination);
+      compNode = comp;
+
+      noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+
+      // Engine: two detuned buzzy oscillators through a low-pass filter.
+      const o1 = ac.createOscillator(), o2 = ac.createOscillator();
+      o1.type = 'sawtooth'; o2.type = 'square';
+      const f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 700;
+      const g = ac.createGain(); g.gain.value = 0;
+      o1.connect(f); o2.connect(f); f.connect(g); g.connect(master);
+      o1.start(); o2.start();
+      eng = { o1, o2, f, g };
+
+      // Tire skid: looping noise through a band-pass filter.
+      const n = ac.createBufferSource(); n.buffer = noiseBuf; n.loop = true;
+      const bf = ac.createBiquadFilter(); bf.type = 'bandpass'; bf.frequency.value = 1800; bf.Q.value = 2;
+      const sg = ac.createGain(); sg.gain.value = 0;
+      n.connect(bf); bf.connect(sg); sg.connect(master); n.start();
+      skid = { bf, sg };
+    }
+
+    const SKID = { ROAD: { f: 1800, q: 2, vol: 0.22 }, ICE: { f: 3400, q: 9, vol: 0.16 }, MUD: { f: 380, q: 1, vol: 0.35 } };
+
+    function update(st) {
+      if (!ac) return;
+      const t = ac.currentTime;
+      const driving = st.state === 'holding';
+      const sliding = st.state === 'sliding';
+      const base = 42 + st.v * 16;
+      eng.o1.frequency.setTargetAtTime(base, t, 0.05);
+      eng.o2.frequency.setTargetAtTime(base * 0.502, t, 0.05);
+      eng.f.frequency.setTargetAtTime(500 + st.v * 140, t, 0.05);
+      const engVol = driving ? 0.13 : sliding ? 0.05 * Math.min(1, st.v / 3) : 0;
+      eng.g.gain.setTargetAtTime(engVol, t, driving ? 0.03 : 0.12);
+
+      const sk = SKID[st.surface.name];
+      skid.bf.frequency.setTargetAtTime(sk.f + st.v * 60, t, 0.05);
+      skid.bf.Q.value = sk.q;
+      const skVol = sliding && st.v > 0.2 ? sk.vol * Math.min(1, st.v / 5) : 0;
+      skid.sg.gain.setTargetAtTime(skVol, t, 0.05);
+    }
+
+    function env(gainNode, t, peak, attack, decay) {
+      gainNode.gain.setValueAtTime(0.0001, t);
+      gainNode.gain.exponentialRampToValueAtTime(peak, t + attack);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+    }
+
+    // Cartoon "AAAAH!": a buzzy voice with vowel formants, sliding down in pitch with wobble.
+    function scream() {
+      if (!ac) return;
+      const t = ac.currentTime;
+      const o = ac.createOscillator(); o.type = 'sawtooth';
+      o.frequency.setValueAtTime(620, t);
+      o.frequency.exponentialRampToValueAtTime(260, t + 1.4);
+      const lfo = ac.createOscillator(), lg = ac.createGain();
+      lfo.frequency.value = 7; lg.gain.value = 22;
+      lfo.connect(lg); lg.connect(o.frequency);
+      const out = ac.createGain();
+      [[800, 6, 1], [1150, 8, 0.6], [2800, 10, 0.25]].forEach(([fq, q, v]) => {
+        const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = fq; bp.Q.value = q;
+        const vg = ac.createGain(); vg.gain.value = v;
+        o.connect(bp); bp.connect(vg); vg.connect(out);
+      });
+      const g = ac.createGain(); out.connect(g); g.connect(master);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(1.4, t + 0.08);
+      g.gain.setValueAtTime(1.4, t + 1.0);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.5);
+      o.start(t); lfo.start(t); o.stop(t + 1.6); lfo.stop(t + 1.6);
+    }
+
+    function splash() {
+      if (!ac) return;
+      const t = ac.currentTime;
+      const n = ac.createBufferSource(); n.buffer = noiseBuf;
+      const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(4000, t);
+      lp.frequency.exponentialRampToValueAtTime(250, t + 0.7);
+      const g = ac.createGain(); env(g, t, 0.7, 0.01, 0.8);
+      n.connect(lp); lp.connect(g); g.connect(master); n.start(t); n.stop(t + 1);
+      // low "ploonk"
+      const o = ac.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.3);
+      const og = ac.createGain(); env(og, t, 0.6, 0.005, 0.35);
+      o.connect(og); og.connect(master); o.start(t); o.stop(t + 0.5);
+    }
+
+    function note(freq, when, dur, vol, type = 'sine') {
+      const t = ac.currentTime + when;
+      const o = ac.createOscillator(); o.type = type; o.frequency.value = freq;
+      const g = ac.createGain(); env(g, t, vol, 0.008, dur);
+      o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.05);
+    }
+
+    function ding()   { if (ac) { note(1319, 0, 0.6, 0.3); note(2637, 0, 0.4, 0.08); } }
+    function bloop()  { if (ac) { note(392, 0, 0.18, 0.18, 'triangle'); note(330, 0.09, 0.22, 0.15, 'triangle'); } }
+    function fanfare() {
+      if (!ac) return;
+      [523, 659, 784, 1047].forEach((f, i) => note(f, i * 0.09, i === 3 ? 0.7 : 0.18, 0.22, 'triangle'));
+      note(2093, 0.27, 0.5, 0.06);
+    }
+    function pop() { if (ac) note(rand(500, 800), 0, 0.08, 0.12, 'square'); }
+
+    function toggleMute() {
+      muted = !muted;
+      save('cliff_muted', muted ? 1 : 0);
+      if (master) master.gain.setTargetAtTime(muted ? 0 : 0.8, ac.currentTime, 0.02);
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (!ac) return;
+      if (document.hidden) ac.suspend(); else ac.resume();
+    });
+
+    // Audio track for clip recording (game sounds go into the video).
+    function streamTrack() {
+      if (!ac || !compNode || !ac.createMediaStreamDestination) return null;
+      if (!recDest) { recDest = ac.createMediaStreamDestination(); compNode.connect(recDest); }
+      return recDest.stream.getAudioTracks()[0] || null;
+    }
+
+    return { init, update, scream, splash, ding, bloop, fanfare, pop, toggleMute, streamTrack, isMuted: () => muted };
+  })();
+
+  // ---------- Clip recorder: each round is recorded as a vertical video ----------
+  const Rec = (() => {
+    let stream = null, rec = null, chunks = [], startedAt = 0;
+    let onReady = null;   // waiting share request, run when the clip is finished
+    let finishing = -1;   // round whose recording is stopped but whose file is not ready yet
+    let clip = null, clipRound = -1, recRound = -1;
+    const MAX_MS = 12000;
+    // Recording reads a separate, smaller canvas (720x1280) that gets a copy of each game frame.
+    // Capturing the big game canvas directly broke drawing on some Android phones, and a smaller
+    // video is lighter to encode. 720x1280 is a normal vertical video size.
+    const recCanvas = document.createElement('canvas');
+    recCanvas.width = 720; recCanvas.height = 1280;
+    const recCtx = recCanvas.getContext('2d');
+    let copying = false;
+    function copyFrame() {
+      if (!copying) return;
+      try { recCtx.drawImage(canvas, 0, 0, recCanvas.width, recCanvas.height); } catch (e) {}
+    }
+    function supported() { return !!(window.MediaRecorder && recCanvas.captureStream); }
+    // MP4 plays everywhere (WhatsApp, Messenger, TikTok). Some browsers claim MP4 but write a file
+    // with no picture, so MP4 is used only after a half-second test recording proves it has video.
+    // Until then (or if the test fails) WebM is used.
+    const MP4 = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4;codecs=avc1', 'video/mp4'];
+    const WEBM = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+    const can = m => { try { return MediaRecorder.isTypeSupported(m); } catch (e) { return false; } };
+    let mp4Ok = false;
+    function pickMime() {
+      const mp4 = MP4.find(can), webm = WEBM.find(can);
+      if (mp4 && (mp4Ok || !webm)) return mp4;   // iPhone has no WebM: MP4 is its only choice
+      return webm || mp4 || '';
+    }
+    function testMp4() {
+      if (!supported()) return;
+      const mp4 = MP4.find(can);
+      if (!mp4 || !WEBM.find(can)) return;
+      let st;
+      try { st = recCanvas.captureStream(30); } catch (e) { return; }
+      copying = true;
+      const parts = [];
+      let r;
+      try { r = new MediaRecorder(st, { mimeType: mp4 }); } catch (e) { return; }
+      r.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
+      r.onstop = () => {
+        st.getTracks().forEach(tr => tr.stop());
+        if (!parts.length) return;
+        const v = document.createElement('video');
+        v.muted = true; v.preload = 'metadata';
+        const url = URL.createObjectURL(new Blob(parts, { type: 'video/mp4' }));
+        const done = ok => { mp4Ok = ok; URL.revokeObjectURL(url); v.removeAttribute('src'); };
+        v.onloadedmetadata = () => done(v.videoWidth > 0 && v.videoHeight > 0);
+        v.onerror = () => done(false);
+        v.src = url;
+      };
+      r.start(100);
+      setTimeout(() => { try { r.stop(); } catch (e) {} }, 700);
+    }
+    setTimeout(testMp4, 300);
+    function start(roundId) {
+      if (!supported()) return;
+      stop();
+      onReady = null;
+      try {
+        if (!stream) stream = recCanvas.captureStream(30);
+        copying = true;
+        if (stream.getAudioTracks().length === 0) { const a = Sound.streamTrack(); if (a) stream.addTrack(a); }
+        const mime = pickMime();
+        const r = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 5000000 } : undefined);
+        const myChunks = [];
+        const myRound = roundId;
+        r.ondataavailable = e => { if (e.data && e.data.size) myChunks.push(e.data); };
+        r.onstop = () => {
+          if (finishing === myRound) finishing = -1;
+          if (!myChunks.length) { onReady = null; return; }
+          // Plain type without codec details: phones reject 'video/webm;codecs=...' for sharing.
+          const raw = r.mimeType || mime || 'video/webm';
+          clip = new Blob(myChunks, { type: raw.indexOf('mp4') >= 0 ? 'video/mp4' : 'video/webm' });
+          clipRound = myRound;
+          if (onReady) { const f = onReady; onReady = null; f(clip); }
+        };
+        r.start(250);
+        rec = r; recRound = roundId; startedAt = performance.now();
+      } catch (e) { rec = null; }
+    }
+    function stop() {
+      if (rec && rec.state !== 'inactive') { finishing = recRound; try { rec.stop(); } catch (e) { finishing = -1; } }
+      rec = null;
+    }
+    function tick(st) {
+      if (!rec) return;
+      const now = performance.now();
+      if (now - startedAt > MAX_MS) stop();
+      else if (st.state === 'stopped' && now - st.endAt > 1200) stop();
+      else if (st.state === 'fell') stop();
+    }
+    function clipFor(roundId) { return clipRound === roundId ? clip : null; }
+    // True from the round's start until its file is ready, with no gap in between.
+    function recordingFor(roundId) { return (!!rec && recRound === roundId) || finishing === roundId; }
+    // Get this round's clip now: finish the recording early if it is still running.
+    function finish(roundId, cb) {
+      if (clipRound === roundId && clip) { cb(clip); return; }
+      if (!!rec && recRound === roundId) { onReady = cb; stop(); }
+      else if (finishing === roundId) { onReady = cb; }
+    }
+    return { start, stop, tick, clipFor, recordingFor, finish, supported, copyFrame, format: () => pickMime() };
+  })();
+
+  // Inside claude.ai the page saves files through the viewer's downloads capability.
+  let claudeDownloads = null;
+  try {
+    if (window.claude && window.claude.use) {
+      window.claude.use('downloads').then(d => { claudeDownloads = d; }).catch(() => {});
+    }
+  } catch (e) {}
+
+  let pendingShare = false;
+  let shareShownFor = -1, shareShownAt = 0;
+  let toast = { msg: '', until: 0 };
+  const SHARE_BTN = { x: W / 2, y: 702, w: 270, h: 56 };
+  const CHALLENGE_BTN = { x: W / 2, y: 784, w: 360, h: 70 };
+  let pendingChallenge = false;
+  function shareVisible() {
+    const ended = s.state === 'stopped' || s.state === 'fell' || (s.state === 'falling' && s.splashed);
+    return ended && (!!Rec.clipFor(s.id) || Rec.recordingFor(s.id));
+  }
+  function inBtn(b, lx, ly) { return Math.abs(lx - b.x) < b.w / 2 && Math.abs(ly - b.y) < b.h / 2; }
+  function inShareBtn(lx, ly) { return inBtn(SHARE_BTN, lx, ly); }
+  function roundEnded() { return s.state === 'stopped' || s.state === 'fell' || (s.state === 'falling' && s.splashed); }
+
+  // ---- Challenge a friend: a message plus a link that replays this exact cliff ----
+  function challengeUrl() {
+    const p = s.params;
+    const score = s.result === null ? 'x' : String(Math.round(s.result * 10));
+    return `${GAME_URL}?c=${p.si}-${Math.round(p.dist * 1000)}-${Math.round(p.vmax * 1000)}&s=${score}`;
+  }
+  function challengeText() {
+    if (s.daily) {
+      const d = getDaily();
+      const mine = d.best !== null ? fmt(d.best) : 'I fell off 😂';
+      return `Cliff Edge daily ${dayKey()}: ${mine} from the edge. Same cliff for everyone today, can you beat me?`;
+    }
+    if (s.friend && s.friendWin && s.friend.score !== null) return `I beat your ${fmt(s.friend.score)} with ${fmt(s.result)}! Your turn, same cliff:`;
+    if (s.result !== null) return `I stopped ${fmt(s.result)} from the cliff edge! Can you beat me on the same cliff?`;
+    return `I flew off the cliff 😂 Can you stop at the edge? Same cliff:`;
+  }
+  // ---- Share panel for browsers without a share menu (Messenger, Facebook, TikTok... on Android) ----
+  const sheetEl = document.getElementById('sheet');
+  function openSheet(title, body, actions) {
+    document.getElementById('sheet-title').textContent = title;
+    document.getElementById('sheet-text').textContent = body;
+    const box = document.getElementById('sheet-actions');
+    box.textContent = '';
+    actions.forEach(a => {
+      const el = document.createElement(a.href ? 'a' : 'button');
+      el.className = 'sheet-btn' + (a.primary ? ' primary' : '');
+      el.textContent = a.label;
+      if (a.href) { el.href = a.href; if (a.newTab) { el.target = '_blank'; el.rel = 'noopener'; } }
+      else el.type = 'button';
+      if (a.onClick) el.addEventListener('click', () => a.onClick(el));
+      box.appendChild(el);
+    });
+    sheetEl.hidden = false;
+  }
+  function closeSheet() { sheetEl.hidden = true; }
+  document.getElementById('sheet-close').addEventListener('click', closeSheet);
+  sheetEl.addEventListener('click', e => { if (e.target === sheetEl) closeSheet(); });
+  sheetEl.addEventListener('pointerdown', e => e.stopPropagation());
+  window.addEventListener('keydown', e => { if (e.key === 'Escape' && !sheetEl.hidden) closeSheet(); });
+
+  // Copy that also works inside in-app browsers, where the newer clipboard call is often blocked.
+  function copyText(str) {
+    let ok = false;
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = str; ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.opacity = '0'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, str.length);
+      ok = document.execCommand('copy');
+      ta.remove();
+    } catch (e) {}
+    if (!ok) { try { navigator.clipboard.writeText(str); ok = true; } catch (e) {} }
+    return ok;
+  }
+  function copyAction(label, str, primary = true) {
+    return { label, primary, onClick: el => {
+      el.textContent = copyText(str) ? 'Copied! Paste it in the chat' : 'Copy failed. Press and hold the link';
+    } };
+  }
+  function challengeSheet(msg, url) {
+    const full = msg + ' ' + url;
+    openSheet('Challenge a friend',
+      'Send this to a friend. They play the same cliff and try to beat you.',
+      [
+        copyAction('Copy link', full),
+        { label: 'WhatsApp', href: 'https://wa.me/?text=' + encodeURIComponent(full), newTab: true },
+        { label: 'Telegram', href: 'https://t.me/share/url?url=' + encodeURIComponent(url) + '&text=' + encodeURIComponent(msg), newTab: true },
+      ]);
+  }
+  function isAndroid() { return /Android/i.test(navigator.userAgent || ''); }
+  // Android only: a link that hands this page to Chrome (documented Chrome intent link).
+  function chromeIntentUrl() {
+    const u = new URL(GAME_URL);
+    return 'intent://' + u.host + u.pathname + '#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(GAME_URL) + ';end';
+  }
+  function clipSheet() {
+    if (isAndroid()) {
+      openSheet('Share your clip',
+        "This app's browser can't share videos. Open the game in Chrome, play a round, then tap SHARE CLIP.",
+        [
+          { label: 'Open in Chrome', href: chromeIntentUrl(), primary: true },
+          copyAction('Copy game link', GAME_URL, false),
+        ]);
+    } else {
+      openSheet('Share your clip',
+        "This app's browser can't share videos. Tap the ••• or share icon, choose Open in Safari, play a round, then tap SHARE CLIP.",
+        [copyAction('Copy game link', GAME_URL)]);
+    }
+  }
+
+  function doChallenge() {
+    Track.send('challenge', s.daily ? -1 : s.cliff);
+    const url = challengeUrl(), msg = challengeText();
+    if (navigator.share) {
+      navigator.share({ title: 'Cliff Edge', text: msg, url }).catch(err => {
+        if (err && err.name === 'AbortError') return;   // player closed the share menu
+        challengeSheet(msg, url);
+      });
+    } else {
+      challengeSheet(msg, url);
+    }
+  }
+  function showToast(msg, ms = 2600) { toast = { msg, until: performance.now() + ms }; }
+
+  // Must run inside a tap (pointerup) so phones allow the share sheet.
+  const GAME_URL = 'https://waeel1899464.github.io/cliff-edge/';
+  function doShare() {
+    Track.send('share_clip', s.cliff);
+    const round = s;
+    Rec.finish(round.id, blob => shareClip(blob, round));
+  }
+  function shareClip(blob, round) {
+    const s = round;
+    const ext = blob.type.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
+    const label = s.result !== null ? s.result.toFixed(1).replace('.', '_') + 'cm' : 'fall';
+    const file = new File([blob], `cliff-edge-${label}.${ext}`, { type: blob.type });
+    const msg = s.result !== null
+      ? `I stopped ${fmt(s.result)} from the edge! Can you get closer? ${GAME_URL}`
+      : `My car flew off the cliff 😂 Can you stop closer to the edge? ${GAME_URL}`;
+    if (claudeDownloads) {
+      claudeDownloads.save({ filename: file.name, data: blob })
+        .then(() => showToast('Saved! Sharing opens on the public link'))
+        .catch(err => { if (!err || err.code !== 'declined') showToast('Could not save the video'); });
+      return;
+    }
+    // Video only, no text: apps like Messenger keep the text and drop the video when both are sent.
+    // The game link is drawn inside the video instead.
+    const shareFile = () => navigator.share({ files: [file] });
+    let why = 'no-share';
+    if (navigator.share) {
+      let ok = false;
+      if (navigator.canShare) { try { ok = navigator.canShare({ files: [file] }); } catch (e) {} }
+      else ok = true;   // older browsers: no canShare, just try
+      why = ok ? '' : 'no-video-share';
+      if (ok) {
+        shareFile().catch(err => {
+          // AbortError = the player closed the share menu.
+          if (err && err.name === 'AbortError') return;
+          if (err && err.name === 'NotAllowedError') { showToast('Tap SHARE CLIP again'); return; }
+          if (inAppBrowser()) { clipSheet(); return; }
+          saveFile(blob, file.name); explainSave('no-video-share');
+        });
+        return;
+      }
+    }
+    // In-app browsers can't share or save videos: offer the way out to Chrome / Safari.
+    if (inAppBrowser() && window.top === window) { clipSheet(); return; }
+    // Other browsers: save the video file and say why sharing was not possible.
+    saveFile(blob, file.name);
+    explainSave(why);
+  }
+
+  function saveFile(blob, name) {
+    try {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+    } catch (e) {}
+  }
+
+  // Links opened inside TikTok, Instagram, Facebook, WhatsApp etc. run in a built-in browser that cannot share files.
+  function inAppBrowser() {
+    const ua = navigator.userAgent || '';
+    return /FBAN|FBAV|FB_IAB|Instagram|TikTok|musical_ly|Bytedance|Snapchat|Line\/|WhatsApp|Telegram|; wv\)/i.test(ua);
+  }
+
+  function explainSave(why) {
+    if (window.top !== window) showToast('Video saved\nSharing works on the public link');
+    else if (inAppBrowser()) showToast('Video saved\nTo share, open this page in Chrome', 5000);
+    else if (why === 'no-video-share') showToast('Video saved\nThis browser can\'t share videos. Try Chrome', 5000);
+    else showToast('Video saved\nThis browser can\'t share. Try Chrome', 5000);
+  }
+
+  // ---------- Helpers ----------
+  const edgeM = EDGE_X / PPM;
+  const rand = (a, b) => a + Math.random() * (b - a);
+  function frontX() { return s.x + CAR_LEN; }
+
+  function puff(x, y, n, color, spread, up, size, life) {
+    for (let i = 0; i < n; i++) {
+      particles.push({ x, y, vx: rand(-spread, spread), vy: -rand(up * 0.4, up), life: rand(life * 0.6, life), t: 0, r: rand(size * 0.5, size), color, g: 500 });
+    }
+  }
+
+  function spawnDust(n) {
+    for (let i = 0; i < n; i++) {
+      particles.push({
+        x: s.x * PPM + 8 + Math.random() * 6, y: GROUND_Y - 2,
+        vx: -(20 + Math.random() * 40) + s.v * 6, vy: -(15 + Math.random() * 45),
+        life: 0.45 + Math.random() * 0.3, t: 0, r: 2 + Math.random() * 3,
+        color: s.surface.dust, g: 80, grow: true,
+      });
+    }
+  }
+
+  // Break the car into pieces that tumble down the cliff.
+  // A missed cliff: lose a heart and retry it; with no hearts left, go back to the checkpoint.
+  function missCliff() {
+    s.missed = true;
+    hearts--;
+    if (hearts <= 0) { cliff = checkpoint; hearts = HEARTS; s.backTo = checkpoint; }
+    s.heartsLeft = hearts;
+    saveProgress();
+  }
+
+  function rememberTry(stopped) {
+    lastTry = { key: s.layoutKey, release: s.releaseFront, stop: stopped ? frontX() : null };
+  }
+
+  function startFall() {
+    rememberTry(false);
+    if (!s.friend && !s.daily) missCliff();
+    s.state = 'falling';
+    s.endAt = performance.now();
+    s.fallT = 0;
+    const len = CAR_LEN * PPM;
+    const cx = s.x * PPM + len / 2;
+    const bodyY = GROUND_Y - WHEEL_R - CAR_H / 2 - 2;
+    const vx = Math.max(s.v, 1.4) * PPM;
+    s.parts = [
+      cx < EDGE_X + 12
+        // Slow: the body tips forward over the edge before it drops.
+        ? { kind: 'body', x: cx, y: bodyY, vx, vy: 0, rot: s.tilt, vrot: 1.5, r: 12, tipping: true }
+        : { kind: 'body', x: cx, y: bodyY, vx, vy: -60, rot: s.tilt, vrot: 3 + s.v * 0.5, r: 12 },
+      { kind: 'wheel', x: cx - len / 2 + 11, y: GROUND_Y - WHEEL_R, vx: vx + rand(-80, 40), vy: -rand(180, 320), rot: 0, vrot: rand(-14, 14), r: WHEEL_R },
+      { kind: 'wheel', x: cx + len / 2 - 11, y: GROUND_Y - WHEEL_R, vx: vx + rand(20, 140), vy: -rand(220, 380), rot: 0, vrot: rand(-14, 14), r: WHEEL_R },
+    ];
+    s.fallMsg = s.v < 1.5 ? 'SO CLOSE!' : ['NOOOO!', 'BYE BYE!', 'OOPS!', 'SPLASH!'][Math.floor(Math.random() * 4)];
+    puff(EDGE_X, GROUND_Y, 10, s.surface.dust, 90, 160, 4, 0.6);
+    Sound.scream();
+    Sound.pop();
+  }
+
+  function updateFall(dt) {
+    s.fallT += dt;
+    for (const p of s.parts) {
+      if (p.tipping) {
+        p.vx += 250 * dt; p.vrot += 10 * dt;
+        p.x += p.vx * dt; p.rot += p.vrot * dt;
+        p.y += p.vx * dt * Math.sin(Math.max(0, p.rot)) * 0.6;
+        if (p.x > EDGE_X + p.r) { p.tipping = false; p.vy = p.vx * Math.sin(Math.max(0, p.rot)); }
+        continue;
+      }
+      if (p.inWater) {
+        p.vx *= Math.pow(0.2, dt);
+        p.vy += (35 - p.vy) * Math.min(1, dt * 3);   // sink slowly
+        p.vrot *= Math.pow(0.3, dt);
+      } else {
+        p.vy += G_PX * dt;
+      }
+      const prevY = p.y;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vrot * dt;
+
+      // Bounce off the cliff top (wheels that hop backwards)
+      if (!p.inWater && p.kind === 'wheel' && p.x < EDGE_X && prevY + p.r <= GROUND_Y && p.y + p.r > GROUND_Y) {
+        p.y = GROUND_Y - p.r; p.vy = -Math.abs(p.vy) * 0.45; p.vx *= 0.7;
+      }
+      // Bounce off the cliff wall
+      if (!p.inWater && p.y + p.r > GROUND_Y && p.x - p.r < EDGE_X && prevY + p.r > GROUND_Y) {
+        p.x = EDGE_X + p.r; p.vx = Math.abs(p.vx) * 0.5 + 30; p.vrot *= -0.7;
+        puff(EDGE_X, p.y, 5, s.surface.dust, 60, 80, 3, 0.5);
+      }
+      // Hit the sea
+      if (!p.inWater && p.y > WATER_Y) {
+        p.inWater = true;
+        p.vy *= 0.15;
+        const big = p.kind === 'body';
+        puff(p.x, WATER_Y, big ? 26 : 8, '#e8f6ff', big ? 140 : 60, big ? 420 : 220, big ? 6 : 4, 0.9);
+        puff(p.x, WATER_Y, big ? 14 : 4, '#5fa8ff', big ? 110 : 50, big ? 320 : 160, big ? 5 : 3, 0.8);
+        if (big) { shake = 14; s.splashed = true; s.splashAt = s.fallT; Sound.splash(); }
+      }
+    }
+    if (s.splashed && s.fallT - s.splashAt > 0.9) s.state = 'fell';
+  }
+
+  // ---------- Update ----------
+  function update(rawDt) {
+    // Slow motion for the first moment of a fall: the dramatic part.
+    let dt = rawDt;
+    if (s.state === 'falling' && s.fallT < 0.45) dt = rawDt * 0.3;
+
+    const prevV = s.v;
+    if (s.state === 'holding') {
+      s.v = Math.min(s.vmax, s.v + ACCEL * dt);
+    } else if (s.state === 'sliding') {
+      const decel = s.surface.base + s.surface.drag * s.v;
+      s.v = Math.max(0, s.v - decel * dt);
+      if (s.v < 0.01) s.v = 0;
+      if (s.v > 0.4 && Math.random() < 0.9) spawnDust(Math.random() < s.v / 6 ? 2 : 1);
+    }
+    s.a = dt > 0 ? (s.v - prevV) / dt : 0;
+
+    if (s.state === 'holding' || s.state === 'sliding') {
+      s.x += s.v * dt;
+      if (frontX() > edgeM) {
+        startFall();
+      } else if (s.state === 'sliding' && s.v === 0) {
+        s.state = 'stopped';
+        s.endAt = performance.now();
+        s.result = (edgeM - frontX()) * 100;          // centimeters
+        rememberTry(true);
+        if (s.friend) { s.friendWin = s.friend.score === null || s.result < s.friend.score; if (s.friendWin) s.friend.won = true; }
+        if (best === null || s.result < best) { best = s.result; save('cliff_best', best); s.newBest = true; }
+        if (s.daily) {
+          const d = getDaily();
+          if (d.best === null || s.result < d.best) { d.best = s.result; s.newDailyBest = true; saveJSON('cliff_daily', d); }
+        } else if (!s.friend) {
+          if (s.result < s.target) {
+            s.cleared = true;
+            cliff++;
+            if (isCheckpoint(cliff)) { checkpoint = cliff; hearts = HEARTS; s.newCp = true; }
+            if (cliff > bestCliff) { bestCliff = cliff; s.newBestCliff = true; }
+            saveProgress();
+            puff(EDGE_X - 30, GROUND_Y - 40, 30, '#ffd23f', 160, 380, 5, 1.1);
+            puff(EDGE_X - 30, GROUND_Y - 40, 20, '#ff4f7b', 160, 380, 4, 1.1);
+          } else {
+            missCliff();
+          }
+        }
+        if (s.cleared || s.friendWin || s.newDailyBest) Sound.fanfare();
+        else if (s.newBest || s.result < 10) Sound.ding();
+        else Sound.bloop();
+      }
+    } else if (s.state === 'falling' || s.state === 'fell') {
+      updateFall(dt);
+    }
+
+    // Body pitch spring
+    const targetTilt = (s.state === 'holding' || s.state === 'sliding') ? -s.a * 0.012 : 0;
+    s.tiltV += ((targetTilt - s.tilt) * 120 - s.tiltV * 9) * dt;
+    s.tilt += s.tiltV * dt;
+
+    // Character springs: googly pupil lags behind motion, antenna wobbles, body squashes.
+    const moving = s.state === 'holding' || s.state === 'sliding';
+    const ax = moving ? -s.a : 0;
+    const eyeTX = moving ? Math.max(-6, Math.min(6, ax * 0.7 + 2)) : (s.state === 'stopped' ? 3 : 1.5);
+    const eyeTY = s.state === 'stopped' && edgeM - frontX() < 1 ? 3 : 0;
+    s.eyeV += ((eyeTX - s.eyeX) * 260 - s.eyeV * 11) * dt; s.eyeX += s.eyeV * dt;
+    s.eyeYV += ((eyeTY - s.eyeY) * 260 - s.eyeYV * 11) * dt; s.eyeY += s.eyeYV * dt;
+    if (s.parts) s.antV += rand(-60, 60) * dt * 10;
+    s.antV += ((Math.max(-0.9, Math.min(0.9, ax * 0.07)) - s.ant) * 90 - s.antV * 3.5) * dt; s.ant += s.antV * dt;
+    const sqT = moving ? Math.max(-0.12, Math.min(0.12, s.a * 0.012)) : 0;
+    s.sqV += ((sqT - s.sq) * 160 - s.sqV * 8) * dt; s.sq += s.sqV * dt;
+
+    // Particles
+    for (const p of particles) {
+      p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt;
+    }
+    particles = particles.filter(p => p.t < p.life);
+    shake *= Math.pow(0.02, rawDt);
+
+    // Camera: zoom toward the edge when close; pull back to show the fall.
+    let zt = 1, ft = CAM_ANCHOR_X, fyt = GROUND_Y;
+    if (s.parts) {
+      // Follow the falling body down to the splash, zoomed in.
+      const b = s.parts[0];
+      zt = 2;
+      ft = CAM_ANCHOR_X + (b.x - CAM_ANCHOR_X);
+      fyt = Math.min(b.y, WATER_Y - 40);
+    } else if (s.state === 'sliding' || s.state === 'stopped') {
+      const d = edgeM - frontX();
+      const near = Math.max(0, Math.min(1, 1 - d / 3));
+      zt = 1 + 2.0 * near * near;
+      const focus = (frontX() * PPM + EDGE_X) / 2;
+      ft = CAM_ANCHOR_X + (focus - CAM_ANCHOR_X) * near;
+    }
+    const ease = 1 - Math.exp(-rawDt * (s.parts ? 6 : 5));
+    cam.z += (zt - cam.z) * ease;
+    cam.fx += (ft - cam.fx) * ease;
+    cam.fy += (fyt - cam.fy) * ease;
+  }
+
+  // ---------- Draw ----------
+  function fmt(cm) {
+    if (cm < 100) return cm.toFixed(1) + ' cm';
+    return (cm / 100).toFixed(2) + ' m';
+  }
+  function fmtTarget(cm) { return cm >= 100 ? (cm / 100) + ' m' : (cm >= 10 ? Math.round(cm) : cm.toFixed(1)) + ' cm'; }
+
+  function text(str, x, y, size, color, weight = 800, align = 'center') {
+    ctx.font = `${weight} ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = size * 0.18;
+    ctx.strokeStyle = 'rgba(10,10,25,0.85)';
+    ctx.lineJoin = 'round';
+    ctx.strokeText(str, x, y);
+    ctx.fillStyle = color;
+    ctx.fillText(str, x, y);
+  }
+
+  function drawWheel(x, y, rot) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    ctx.fillStyle = '#1b1d2b';
+    ctx.beginPath(); ctx.arc(0, 0, WHEEL_R, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#8a8fa8';
+    ctx.fillRect(-1.5, -WHEEL_R + 2, 3, WHEEL_R - 2);
+    ctx.restore();
+  }
+
+  // Body centered on (0,0). mood: 'calm' | 'scared' | 'scream' | 'happy'
+  // The character: a jelly-bean car with one big googly eye and a wobbly antenna.
+  // mood: 'calm' | 'determined' | 'scared' | 'happy' | 'scream'
+  function drawBody(braking, mood) {
+    const len = CAR_LEN * PPM, h = CAR_H;
+    const sq = s.sq || 0;
+    ctx.save();
+    ctx.scale(1 + sq, 1 - sq);
+
+    // antenna (springy) with a glowing ball
+    ctx.save();
+    ctx.translate(-8, -h / 2 - 14);
+    ctx.rotate(s.ant || 0);
+    ctx.strokeStyle = '#2b2d42'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -16); ctx.stroke();
+    ctx.fillStyle = skin.ball;
+    ctx.beginPath(); ctx.arc(0, -18, 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.beginPath(); ctx.arc(-1.5, -19.5, 1.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // roof dome
+    ctx.fillStyle = skin.roof;
+    ctx.beginPath(); ctx.roundRect(-len / 2 + 5, -h / 2 - 15, len * 0.52, 20, [10, 10, 2, 2]); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.beginPath(); ctx.roundRect(-len / 2 + 9, -h / 2 - 12, 6, 9, 3); ctx.fill();
+
+    // body: bean shape with a darker belly
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(-len / 2, -h / 2, len, h, 12);
+    ctx.fillStyle = skin.body; ctx.fill();
+    ctx.clip();
+    ctx.fillStyle = skin.shade;
+    ctx.fillRect(-len / 2, h / 2 - 7, len, 7);
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.fillRect(-len / 2 + 6, -h / 2 + 3, len * 0.35, 3);
+    ctx.restore();
+
+    // brake light
+    ctx.fillStyle = braking ? '#ff1f3d' : '#7a2236';
+    if (braking) { ctx.shadowColor = '#ff1f3d'; ctx.shadowBlur = 14; }
+    ctx.beginPath(); ctx.roundRect(-len / 2 - 2, -h / 2 + 5, 5, 8, 2); ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // cheek
+    ctx.fillStyle = 'rgba(255,150,170,0.75)';
+    ctx.beginPath(); ctx.ellipse(4, 6, 4.5, 3, 0, 0, Math.PI * 2); ctx.fill();
+
+    // eye
+    const ex = 13, ey = -4;
+    const er = mood === 'scream' ? 12.5 : mood === 'scared' ? 11.5 : 10;
+    ctx.lineWidth = 2; ctx.strokeStyle = '#2b2d42';
+    if (mood === 'happy') {
+      ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.arc(ex, ey + 4, 6.5, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+    } else {
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(ex, ey, er, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      let px = s.eyeX || 0, py = s.eyeY || 0;
+      if (mood === 'scream') { px = rand(-4, 4); py = rand(-4, 4); }
+      const pr = mood === 'calm' || mood === 'determined' ? 4.8 : 3.2;
+      const lim = er - pr - 1.5;
+      const m = Math.hypot(px, py); if (m > lim) { px *= lim / m; py *= lim / m; }
+      ctx.fillStyle = '#12141f';
+      ctx.beginPath(); ctx.arc(ex + px, ey + py, pr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(ex + px - 1.4, ey + py - 1.6, 1.3, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // eyebrow
+    ctx.strokeStyle = '#2b2d42'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath();
+    if (mood === 'determined') { ctx.moveTo(5, -17); ctx.lineTo(20, -13); }
+    else if (mood === 'scared' || mood === 'scream') { ctx.moveTo(5, -18); ctx.quadraticCurveTo(12, -24, 21, -19); }
+    else if (mood === 'happy') { ctx.moveTo(6, -14); ctx.quadraticCurveTo(13, -19, 20, -14); }
+    else { ctx.moveTo(6, -16); ctx.lineTo(20, -16); }
+    ctx.stroke();
+
+    // mouth
+    ctx.fillStyle = '#5a0f22'; ctx.strokeStyle = '#5a0f22'; ctx.lineWidth = 2.2;
+    const mx = 17, my = 8;
+    ctx.beginPath();
+    if (mood === 'scream') { ctx.ellipse(mx, my + 1, 4.5, 5.5, 0, 0, Math.PI * 2); ctx.fill(); }
+    else if (mood === 'scared') { ctx.ellipse(mx, my, 2.5, 3, 0, 0, Math.PI * 2); ctx.fill(); }
+    else if (mood === 'happy') { ctx.arc(mx, my - 1, 5, 0.1, Math.PI - 0.1); ctx.closePath(); ctx.fill(); }
+    else if (mood === 'determined') { ctx.moveTo(mx - 4, my); ctx.lineTo(mx + 3, my - 1); ctx.stroke(); }
+    else { ctx.arc(mx, my - 3, 4, 0.3, Math.PI - 0.3); ctx.stroke(); }
+
+    // sweat drop when scared
+    if (mood === 'scared') {
+      ctx.fillStyle = '#7fd4ff';
+      ctx.beginPath();
+      ctx.moveTo(-1, -22); ctx.quadraticCurveTo(3, -16, -1, -14); ctx.quadraticCurveTo(-5, -16, -1, -22);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function carMood() {
+    const d = edgeM - frontX();
+    if (s.state === 'holding') return 'determined';
+    if (s.state === 'stopped') return s.result < 10 ? 'happy' : d < 1 ? 'scared' : 'calm';
+    if (s.state === 'sliding') return d < 1.2 ? 'scared' : 'determined';
+    return 'calm';
+  }
+
+  function drawCar() {
+    const len = CAR_LEN * PPM;
+    const cx = s.x * PPM + len / 2;
+    const braking = s.state === 'sliding' && s.v > 0;
+
+    ctx.save();
+    ctx.translate(cx, GROUND_Y - WHEEL_R);
+    drawWheel(-len / 2 + 11, 0, s.x * PPM / WHEEL_R);
+    drawWheel(len / 2 - 11, 0, s.x * PPM / WHEEL_R);
+    ctx.rotate(s.tilt);
+    ctx.translate(0, -CAR_H / 2 - 2);
+    drawBody(braking, carMood());
+    ctx.restore();
+  }
+
+  // Buttons pop in once when the round ends, then stay still.
+  function drawButton(b, label, fill, ink, size, icon) {
+    if (shareShownFor !== s.id) { shareShownFor = s.id; shareShownAt = performance.now(); }
+    const k = Math.min(1, (performance.now() - shareShownAt) / 180);
+    const pop = 0.85 + 0.15 * (1 - Math.pow(1 - k, 3)) + Math.sin(k * Math.PI) * 0.05;
+    ctx.save();
+    ctx.translate(b.x, b.y); ctx.scale(pop, pop);
+    ctx.fillStyle = 'rgba(10,10,25,0.45)';
+    ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2 + 5, b.w, b.h, b.h / 2); ctx.fill();
+    ctx.fillStyle = fill;
+    ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
+    ctx.font = `900 ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(label).width;
+    const ix = -tw / 2 - 8;
+    ctx.fillStyle = ink;
+    if (icon === 'play') {
+      ctx.beginPath(); ctx.moveTo(ix - 16, -10); ctx.lineTo(ix - 16, 10); ctx.lineTo(ix, 0); ctx.closePath(); ctx.fill();
+    } else if (icon === 'flag') {
+      ctx.fillRect(ix - 16, -13, 3, 26);
+      ctx.beginPath(); ctx.moveTo(ix - 13, -13); ctx.lineTo(ix + 3, -7); ctx.lineTo(ix - 13, -1); ctx.closePath(); ctx.fill();
+    }
+    ctx.fillText(label, 12, 1);
+    ctx.restore();
+  }
+  function drawShareBtn() { drawButton(SHARE_BTN, 'SHARE CLIP', '#ffffff', '#12141f', 22, 'play'); }
+  function drawChallengeBtn() { drawButton(CHALLENGE_BTN, 'CHALLENGE A FRIEND', '#ffd23f', '#12141f', 26, 'flag'); }
+
+  // Hearts row; `lost` also shows the spent hearts as empty outlines.
+  function drawHearts(cx, cy, n, lost) {
+    const total = HEARTS, gap = 40, x0 = cx - (total - 1) * gap / 2;
+    for (let i = 0; i < total; i++) {
+      const full = i < n;
+      ctx.save(); ctx.translate(x0 + i * gap, cy + 2); ctx.scale(1.6, 1.6);
+      ctx.beginPath();
+      ctx.moveTo(0, 6);
+      ctx.bezierCurveTo(-12, -2, -8, -12, 0, -6);
+      ctx.bezierCurveTo(8, -12, 12, -2, 0, 6);
+      ctx.closePath();
+      ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(10,10,25,0.75)'; ctx.stroke();
+      ctx.fillStyle = full ? '#ff4f7b' : 'rgba(255,255,255,0.18)';
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Bottom line on end screens.
+  function endHint(runText, friendText) {
+    if (s.friend) return friendText;
+    if (s.daily) {
+      const left = dailyLeft();
+      return left > 0 ? `TAP TO TRY AGAIN · ${left} LEFT` : `NEXT DAILY IN ${nextDailyIn()}`;
+    }
+    return runText;
+  }
+
+  // "DAILY" pill on the home screen (top right, next to the sound button).
+  const DAILY_PILL = { x: W - 150, y: 50, w: 132, h: 42 };
+  function pillVisible() { return s.state === 'ready' && !s.friend; }
+  function toggleDaily() {
+    if (s.daily) { mode = 'run'; newRound(); return; }
+    if (dailyLeft() > 0) { mode = 'daily'; newRound(); }
+    else showToast('Daily done for today\nNext one in ' + nextDailyIn(), 3000);
+  }
+  function drawDailyPill() {
+    const b = DAILY_PILL, streak = getStreak();
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    ctx.fillStyle = s.daily ? 'rgba(255,255,255,0.9)' : 'rgba(10,10,25,0.4)';
+    ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
+    ctx.font = '900 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = s.daily ? '#12141f' : '#ffffff';
+    const label = s.daily ? '✕ EXIT DAILY' : (streak > 0 ? `DAILY 🔥${streak}` : 'DAILY');
+    ctx.fillText(label, 0, 1);
+    // red dot: today's daily not played yet
+    if (!s.daily && getDaily().tries === 0) {
+      ctx.fillStyle = '#ff3355';
+      ctx.beginPath(); ctx.arc(b.w / 2 - 6, -b.h / 2 + 5, 6, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Ruler on the cliff top, plus the ghost of the previous try on this same cliff.
+  function drawAssist() {
+    const top = GROUND_Y;
+    ctx.save();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    // meter marks
+    for (let m = 1; m <= 5; m++) {
+      const x = EDGE_X - m * PPM;
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillRect(x - 1, top, 2, 12);
+      ctx.font = '800 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.fillText(m + 'm', x, top + 26);
+    }
+    // fine marks near the edge (readable when the camera zooms in)
+    [[0.5, '50'], [0.2, '20'], [0.1, '10']].forEach(([m, label]) => {
+      const x = EDGE_X - m * PPM;
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.fillRect(x - 0.5, top, 1, 6);
+      if (cam.z > 1.6) {
+        ctx.font = '800 5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.fillText(label, x, top + 11);
+      }
+    });
+    // ghost of the previous try on this cliff
+    if (lastTry && lastTry.key === s.layoutKey && s.state !== 'stopped' && !s.parts) {
+      if (lastTry.release !== null) {
+        const x = lastTry.release * PPM;
+        ctx.strokeStyle = 'rgba(255,210,63,0.95)'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(x, top - 46); ctx.lineTo(x, top); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.fillStyle = '#ffd23f';
+        ctx.fillText('LET GO', x, top - 54);
+      }
+      if (lastTry.stop !== null) {
+        const len = CAR_LEN * PPM, x = lastTry.stop * PPM - len;
+        ctx.fillStyle = 'rgba(255,255,255,0.28)';
+        ctx.beginPath(); ctx.roundRect(x, top - WHEEL_R * 2 - CAR_H - 2, len, CAR_H + WHEEL_R * 2 + 2, 10); ctx.fill();
+        ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillText('LAST', x + len / 2, top - WHEEL_R * 2 - CAR_H - 12);
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawMuteIcon() {
+    ctx.save();
+    ctx.translate(MUTE_X, MUTE_Y);
+    ctx.fillStyle = 'rgba(10,10,25,0.35)';
+    ctx.beginPath(); ctx.arc(0, 0, 22, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-10, -4); ctx.lineTo(-5, -4); ctx.lineTo(1, -10); ctx.lineTo(1, 10); ctx.lineTo(-5, 4); ctx.lineTo(-10, 4);
+    ctx.closePath(); ctx.fill();
+    if (Sound.isMuted()) {
+      ctx.beginPath(); ctx.moveTo(5, -5); ctx.lineTo(13, 5); ctx.moveTo(13, -5); ctx.lineTo(5, 5); ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.arc(3, 0, 6, -0.9, 0.9); ctx.stroke();
+      ctx.beginPath(); ctx.arc(3, 0, 11, -0.9, 0.9); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawParts() {
+    for (const p of s.parts) {
+      if (p.kind === 'wheel') { drawWheel(p.x, p.y, p.rot); continue; }
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      drawBody(false, 'scream');
+      ctx.restore();
+    }
+  }
+
+  function draw() {
+    // Start every frame from a clean canvas state, so nothing left over from a previous
+    // frame (clip, transparency, transform) can hide the drawing.
+    if (ctx.reset) ctx.reset();
+    else { ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowBlur = 0; }
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    if (shake > 0.3) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+
+    // sky (screen space)
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#2a1f5c');
+    g.addColorStop(0.6, '#ff7a59');
+    g.addColorStop(1, '#ffb36b');
+    ctx.fillStyle = g;
+    ctx.fillRect(-20, -20, W + 40, H + 40);
+
+    // world (camera space)
+    ctx.save();
+    ctx.translate(CAM_ANCHOR_X, GROUND_Y);
+    ctx.scale(cam.z, cam.z);
+    ctx.translate(-cam.fx, -cam.fy);
+
+    ctx.fillStyle = s.surface.side;
+    ctx.fillRect(-2000, GROUND_Y + 14, EDGE_X + 2000, 3000);
+    ctx.fillStyle = s.surface.top;
+    ctx.fillRect(-2000, GROUND_Y, EDGE_X + 2000, 14);
+
+    // edge flag (points out over the drop)
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(EDGE_X - 3, GROUND_Y - 30, 3, 30);
+    ctx.fillStyle = '#ff3355';
+    ctx.beginPath();
+    ctx.moveTo(EDGE_X - 3, GROUND_Y - 30);
+    ctx.lineTo(EDGE_X + 19, GROUND_Y - 24);
+    ctx.lineTo(EDGE_X - 3, GROUND_Y - 18);
+    ctx.fill();
+
+    // Ground type, written on the cliff face instead of the top of the screen.
+    ctx.font = '800 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    if (s.state === 'ready' || s.state === 'holding') ctx.fillText(s.surface.name, EDGE_X - 16, GROUND_Y + (ASSIST ? 62 : 40));
+
+    if (ASSIST) drawAssist();
+    if (s.parts) drawParts(); else drawCar();
+
+    // sea drawn over the pieces so sinking parts look underwater
+    ctx.fillStyle = 'rgba(31,61,122,0.92)';
+    ctx.fillRect(-2000, WATER_Y, 6000, 3000);
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillRect(-2000, WATER_Y, 6000, 3);
+
+    for (const p of particles) {
+      ctx.globalAlpha = 0.8 * (1 - p.t / p.life);
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.grow ? p.r * (1 + p.t * 2) : p.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // HUD (screen space)
+    text('BEST ' + bestCliff, 26, 50, 22, '#ffffff', 800, 'left');
+
+    drawMuteIcon();
+    if (pillVisible()) drawDailyPill();
+
+    // Game link on the end screens; every recorded clip ends on one, so clips carry it.
+    if (roundEnded()) {
+    ctx.font = '700 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(10,10,25,0.45)';
+    ctx.beginPath(); ctx.roundRect(W / 2 - 168, 930, 336, 26, 13); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText('▶ waeel1899464.github.io/cliff-edge', W / 2, 944);
+    }
+
+    // Top banner: friend challenge, daily challenge, or the endless run
+    if (s.daily) {
+      const d = getDaily(), left = DAILY_TRIES - d.tries, streak = getStreak();
+      text('DAILY CHALLENGE', W / 2, 150, 20, '#ffd23f', 800);
+      if (s.state === 'ready') {
+        text(d.best !== null ? 'BEST TODAY ' + fmt(d.best) : 'ONE CLIFF FOR EVERYONE', W / 2, 194, d.best !== null ? 40 : 30, '#ffffff', 900);
+        text(`${left} ${left === 1 ? 'TRY' : 'TRIES'} LEFT TODAY`, W / 2, 238, 18, '#fff3c4', 700);
+      } else if (roundEnded()) {
+        text(streak > 0 ? `🔥 ${streak} DAY STREAK` : `TRY ${s.dailyTry}/${DAILY_TRIES}`, W / 2, 194, 26, '#ffffff', 900);
+      }
+    } else if (s.friend) {
+      text(`FRIEND'S CHALLENGE · TRY ${s.friendTry}/${FRIEND_TRIES}`, W / 2, 150, 20, '#ffd23f', 800);
+      text(s.friend.score === null ? 'YOUR FRIEND FELL OFF' : 'BEAT ' + fmt(s.friend.score), W / 2, 192, 38, '#ffffff', 900);
+      text('Same cliff, same speed', W / 2, 232, 20, '#fff3c4', 600);
+    } else if (s.cleared) {
+      text(s.newCp ? 'CHECKPOINT SAVED!' : 'CLIFF CLEARED!', W / 2, 150, 34, '#ffd23f', 900);
+      text(s.newCp ? `Hearts refilled · next: cliff ${cliff}` : `Next: cliff ${cliff}`, W / 2, 196, 22, '#fff3c4', 800);
+    } else if (s.missed && (s.state === 'stopped' || s.state === 'fell' || s.splashed)) {
+      if (s.backTo) {
+        text('NO HEARTS LEFT', W / 2, 150, 34, '#ff8fa8', 900);
+        text(`Back to checkpoint · cliff ${s.backTo}`, W / 2, 196, 22, '#fff3c4', 800);
+      } else {
+        text('MISSED!', W / 2, 150, 34, '#ff8fa8', 900);
+        drawHearts(W / 2, 198, s.heartsLeft, true);
+      }
+    } else {
+      text(`CLIFF ${s.cliff}`, W / 2, 150, 20, '#ffd23f', 800);
+      text('UNDER ' + fmtTarget(s.target), W / 2, 194, 44, '#ffffff', 900);
+      drawHearts(W / 2, 242, hearts, false);
+    }
+
+    if (s.state === 'ready') {
+      // Teach the controls only in the first rounds; after that the screen stays clean.
+      if (roundsPlayed < 3) {
+        text('HOLD TO DRIVE', W / 2, 380, 40, '#ffffff');
+        text('Let go to stop at the edge', W / 2, 426, 22, '#fff3c4', 600);
+      }
+    } else if (s.state === 'sliding' || (ASSIST && s.state === 'holding')) {
+      text(fmt(Math.max(0, (edgeM - frontX()) * 100)), W / 2, 340, 52, 'rgba(255,255,255,0.9)');
+    } else if (s.state === 'stopped') {
+      text(fmt(s.result), W / 2, 300, 76, '#ffffff');
+      if (s.friend) text(s.friendWin ? 'YOU BEAT YOUR FRIEND!' : 'YOUR FRIEND WINS', W / 2, 358, 30, s.friendWin ? '#ffd23f' : '#fff3c4', 900);
+      else if (s.daily) text(s.newDailyBest ? 'NEW BEST TODAY!' : 'BEST TODAY ' + fmt(getDaily().best), W / 2, 358, 28, s.newDailyBest ? '#ffd23f' : '#fff3c4', 800);
+      else text(s.newBest ? 'NEW BEST STOP!' : 'from the edge', W / 2, 358, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
+      text(endHint(s.cleared ? `TAP FOR CLIFF ${cliff}` : `TAP TO RETRY CLIFF ${cliff}`, 'TAP TO PLAY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
+    } else if (s.state === 'falling' || s.state === 'fell') {
+      text(s.fallMsg, W / 2, 340, 64, '#ffffff');
+      if (s.friend) text(s.friend.score === null ? 'YOU BOTH FELL!' : 'YOUR FRIEND WINS', W / 2, 400, 28, '#fff3c4', 900);
+      text(endHint(`TAP TO RETRY CLIFF ${cliff}`, 'TAP TO TRY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
+    }
+    if (shareVisible()) drawShareBtn();
+    if (roundEnded()) drawChallengeBtn();
+    if (performance.now() < toast.until) {
+      ctx.fillStyle = 'rgba(10,10,25,0.8)';
+      const lines = toast.msg.split('\n');
+      const th = 26 + lines.length * 28;
+      ctx.beginPath(); ctx.roundRect(W / 2 - 255, 600 - th / 2, 510, th, 22); ctx.fill();
+      lines.forEach((ln, i) => text(ln, W / 2, 600 - (lines.length - 1) * 14 + i * 28, i === 0 ? 22 : 18, i === 0 ? '#ffd23f' : '#ffffff', 700));
+    }
+  }
+
+  // ---------- Loop ----------
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    update(dt);
+    Sound.update(s);
+    Rec.tick(s);
+    draw();
+    Rec.copyFrame();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  window.__cliff = () => s;   // used only for automated testing
+  window.__shareVisible = () => shareVisible();
+})();
+</script>
