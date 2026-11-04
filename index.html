@@ -464,9 +464,17 @@
   const SURFACES = Physics.SURFACES.map(p => Object.assign({}, p, SURFACE_LOOK[p.name]));
 
   // Character looks. Only one for now; later these become cosmetic items (never affect score).
+  // V3: car colours for coins (cosmetic only, never anything that changes a result). The shop screen
+  // is prepared but switched off during testing (SHOP_ENABLED); every colour costs coins, none is sold for money yet.
   const SKINS = [
-    { id: 'pinky', name: 'Pinky', body: '#ff4f7b', shade: '#d93a64', roof: '#ffd23f', ball: '#7ef9ff' },
+    { id: 'pinky', name: 'Pinky', body: '#ff4f7b', shade: '#d93a64', roof: '#ffd23f', ball: '#7ef9ff', price: 0 },
+    { id: 'lime',  name: 'Lime',  body: '#7ed957', shade: '#5bb33a', roof: '#ffffff', ball: '#ff4f7b', price: 150 },
+    { id: 'ocean', name: 'Ocean', body: '#3fa8ff', shade: '#2a84d6', roof: '#ffd23f', ball: '#ffffff', price: 300 },
+    { id: 'sunny', name: 'Sunny', body: '#ffc531', shade: '#e0a10f', roof: '#ff4f7b', ball: '#7ef9ff', price: 450 },
+    { id: 'night', name: 'Night', body: '#3b3f5c', shade: '#272a40', roof: '#7ef9ff', ball: '#ffd23f', price: 700 },
+    { id: 'lava',  name: 'Lava',  body: '#ff6a1a', shade: '#d14e0a', roof: '#2b1410', ball: '#ffd23f', price: 1000 },
   ];
+  const SHOP_ENABLED = false;
   let skin = SKINS[0];
 
   // Endless cliffs. Progress is never wiped:
@@ -539,6 +547,17 @@
   let hearts = clampInt(load('cliff_hearts', HEARTS), 1, HEARTS);
   let roundsPlayed = clampInt(load('cliff_rounds', 0), 0, 1e9);
   let bestCliff = clampInt(load('cliff_bestcliff', 1), cliff, 100000);   // the number players compete on
+  // V3: stars per story cliff (best result kept: GOOD 1, GREAT 2, PERFECT 3) and coins (cosmetic only:
+  // car colours later; nothing that changes a score is ever sold or given).
+  const STAR_OF = { GOOD: 1, GREAT: 2, PERFECT: 3 };
+  let stars = (() => { try { const v = JSON.parse(localStorage.getItem(storeKey('cliff_stars')) || '{}'); return v && typeof v === 'object' ? v : {}; } catch (e) { return {}; } })();
+  let coins = clampInt(load('cliff_coins', 0), 0, 1e9);
+  // Coins for a successful stop: the closer to the edge, the more (0-10), plus a bonus for GREAT/PERFECT.
+  function coinReward(resultCm, targetCm, grade) {
+    return Math.round(10 * Math.max(0, 1 - resultCm / targetCm)) + (grade === 'PERFECT' ? 15 : grade === 'GREAT' ? 5 : 0) + 1;
+  }
+  let replay = null;          // a cliff replayed from the map (no hearts, story position unchanged)
+  let screen = 'game';        // 'game' | 'map'
   const isCheckpoint = n => (n - 1) % CP_EVERY === 0;
   function saveProgress() {
     save('cliff_cur', cliff); save('cliff_cp', checkpoint); save('cliff_hearts', hearts); save('cliff_bestcliff', bestCliff);
@@ -654,11 +673,11 @@
       ({ si, dist, vmax } = dailyParams());
     } else {
       mode = 'run';
-      if (ASSIST) { sp = Physics.cliffSpec(cliff); ({ si, dist, vmax } = sp); }   // story cliffs: same for everyone
+      if (ASSIST) { sp = Physics.cliffSpec(replay || cliff); ({ si, dist, vmax } = sp); }   // story cliffs: same for everyone
     }
     if (!sp) sp = Physics.spec({ si, dist, vmax });                               // plain cliff, no twists
     const surface = SURFACES[si];
-    const layoutKey = fr ? 'friend' : daily ? 'daily-' + dayKey() : 'cliff-' + cliff + (ASSIST ? '' : '-' + roundCounter);
+    const layoutKey = fr ? 'friend' : daily ? 'daily-' + dayKey() : 'cliff-' + (replay || cliff) + (ASSIST ? '' : '-' + roundCounter);
     s = {
       id: ++roundCounter,
       state: 'ready',
@@ -666,8 +685,8 @@
       params: { si, dist, vmax },
       friend: fr, friendTry: fr ? fr.tries : 0, friendWin: false,
       daily, dailyDay: daily ? dayKey() : null, dailyTry: 0, newDailyBest: false, layoutKey, releaseFront: null,
-      cliff, target: storyTargetCached(cliff, sp), grade: null, spec: sp, plan: null, surfNow: surface,
-      world: Physics.worldOf(cliff), worldDone: false, cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
+      cliff: replay || cliff, replay: !!replay, target: storyTargetCached(replay || cliff, sp), grade: null, stars: 0, newStars: false, coinsWon: 0, spec: sp, plan: null, surfNow: surface,
+      world: Physics.worldOf(replay || cliff), worldDone: false, cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
       vmax,
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
       x0: EDGE_X / PPM - dist - CAR_LEN, dist,
@@ -702,7 +721,9 @@
     if (Math.hypot(lx - MUTE_X, ly - MUTE_Y) < 34) { Sound.toggleMute(); return; }
     if (challengeVisible() && inBtn(CHALLENGE_BTN, lx, ly)) { pendingChallenge = true; return; }
     if (shareVisible() && inShareBtn(lx, ly)) { pendingShare = true; return; }
+    if (screen === 'map') { mapTap(lx, ly); return; }
     if (pillVisible() && inBtn(DAILY_PILL, lx, ly + 0)) { toggleDaily(); return; }
+    if (mapBtnVisible() && inBtn(MAP_BTN, lx, ly)) { openMap(); return; }
     pressGame(e.pointerId, evT(e));
   }
   // The moment an input really happened. Event timestamps share performance.now's clock; a missing,
@@ -715,6 +736,7 @@
   // The one game action, shared by touch, mouse and keyboard: start driving, or start the next round.
   function pressGame(id, t) {
     const now = performance.now();
+    if (screen === 'map') { closeMap(null); return; }        // keyboard on the map = PLAY
     if (s.state === 'ready') {
       // A daily screen opened before midnight (UTC) shows yesterday's cliff: switch to today's
       // cliff first, without using a try. The player presses again to play it.
@@ -735,6 +757,7 @@
       return;
     }
     if ((s.state === 'stopped' || s.state === 'fell' || s.state === 'falling') && now - s.endAt > 300) {
+      if (s.replay && s.cleared) replay = null;              // replay done: back to your story cliff
       newRound();
     }
   }
@@ -1329,7 +1352,7 @@
     rememberTry(false);
     fallsThisSession++;
     s.fallTiming = fallsThisSession === 1 ? FALL_FULL : FALL_SHORT;
-    if (!s.friend && !s.daily) missCliff();
+    if (!s.friend && !s.daily) { if (s.replay) s.missed = true; else missCliff(); }
     s.state = 'falling';
     s.endAt = performance.now();
     s.fallT = 0;
@@ -1447,13 +1470,21 @@
           if (s.result < s.target) {
             s.cleared = true;
             s.grade = Physics.grade(s.result, s.target);
-            if (s.spec.boss) s.worldDone = true;
-            cliff++;
-            if (isCheckpoint(cliff)) { checkpoint = cliff; hearts = HEARTS; s.newCp = true; }
-            if (cliff > bestCliff) { bestCliff = cliff; s.newBestCliff = true; }
-            saveProgress();
+            s.stars = STAR_OF[s.grade];
+            if (s.stars > (stars[s.cliff] || 0)) { stars[s.cliff] = s.stars; s.newStars = true; saveJSON('cliff_stars', stars); }
+            s.coinsWon = coinReward(s.result, s.target, s.grade);
+            coins += s.coinsWon; save('cliff_coins', coins);
+            if (!s.replay) {
+              if (s.spec.boss) s.worldDone = true;
+              cliff++;
+              if (isCheckpoint(cliff)) { checkpoint = cliff; hearts = HEARTS; s.newCp = true; }
+              if (cliff > bestCliff) { bestCliff = cliff; s.newBestCliff = true; }
+              saveProgress();
+            }
             puff(EDGE_X - 30, GROUND_Y - 40, 30, '#ffd23f', 160, 380, 5, 1.1);
             puff(EDGE_X - 30, GROUND_Y - 40, 20, '#ff4f7b', 160, 380, 4, 1.1);
+          } else if (s.replay) {
+            s.missed = true;
           } else {
             missCliff();
           }
@@ -1951,7 +1982,117 @@
   // Story cliffs are named by world: cliff 17 is "CLIFF 2-7".
   function cliffLabel(n) { const w = Math.floor((n - 1) / 10) + 1, k = (n - 1) % 10 + 1; return `CLIFF ${w}-${k}`; }
 
+  // ---------- World map ----------
+  const MAP_BTN = { x: 74, y: 120, w: 100, h: 40 };
+  function mapBtnVisible() { return screen === 'game' && s.state === 'ready' && !s.daily && !s.friend && ASSIST; }
+  function drawMapBtn() {
+    const b = MAP_BTN;
+    ctx.save(); ctx.translate(b.x, b.y);
+    ctx.fillStyle = 'rgba(10,10,25,0.4)';
+    ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
+    ctx.font = '900 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff';
+    ctx.fillText('MAP', 8, 1);
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;   // small folded-map icon
+    ctx.beginPath(); ctx.moveTo(-34, -8); ctx.lineTo(-27, -11); ctx.lineTo(-20, -8); ctx.lineTo(-13, -11); ctx.lineTo(-13, 8); ctx.lineTo(-20, 11);
+    ctx.lineTo(-27, 8); ctx.lineTo(-34, 11); ctx.closePath(); ctx.stroke();
+    ctx.restore();
+  }
+  function drawCoin(x, y, r) {
+    ctx.fillStyle = '#ffc531'; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#b8860b'; ctx.lineWidth = Math.max(1.5, r * 0.18); ctx.beginPath(); ctx.arc(x, y, r * 0.62, 0, Math.PI * 2); ctx.stroke();
+  }
+  function drawCoinCount(x, y) { drawCoin(x + 9, y, 9); text(String(coins), x + 24, y + 1, 18, '#ffe27a', 900, 'left'); }
+  function starPath(cx, cy, r) {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * 0.45 : r; ctx.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr); }
+    ctx.closePath();
+  }
+  function drawStarRow(cx, cy, n, r) {
+    for (let i = 0; i < 3; i++) {
+      const x = cx + (i - 1) * r * 2.4;
+      starPath(x, cy, r);
+      ctx.fillStyle = i < n ? '#ffd23f' : 'rgba(10,10,25,0.35)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(10,10,25,0.8)'; ctx.lineWidth = 2; ctx.stroke();
+    }
+  }
+  // layout: 5 world cards, 10 cliffs each; returns the cliff nodes for drawing and tapping
+  function mapNodes() {
+    const out = [];
+    for (let w = 0; w < 5; w++) for (let k = 0; k < 10; k++) {
+      out.push({ n: w * 10 + k + 1, w, k, x: 52 + k * 48.4, y: 212 + w * 136 });
+    }
+    return out;
+  }
+  const MAP_PLAY = { x: W / 2, y: 900, w: 300, h: 70 };
+  const MAP_SHOP = { x: W - 70, y: 54, w: 110, h: 40 };
+  function openMap() { screen = 'map'; Sound.init(); }
+  function closeMap(n) {
+    screen = 'game';
+    const next = n && n !== cliff ? n : null;
+    if (next !== replay || s.state !== 'ready' || s.daily) { replay = next; mode = 'run'; newRound(); }
+  }
+  function mapTap(lx, ly) {
+    if (inBtn(MAP_PLAY, lx, ly)) { closeMap(null); return; }
+    for (const nd of mapNodes()) {
+      if (Math.hypot(lx - nd.x, ly - nd.y) < 22 && nd.n <= Math.min(bestCliff, Physics.CLIFFS.length)) { closeMap(nd.n); return; }
+    }
+  }
+  function drawMap() {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#141629'); g.addColorStop(1, '#22163a');
+    ctx.fillStyle = g; ctx.fillRect(-20, -20, W + 40, H + 40);
+    let total = 0; for (const k in stars) total += stars[k];
+    text('WORLD MAP', 26, 54, 30, '#ffffff', 900, 'left');
+    starPath(40, 98, 11); ctx.fillStyle = '#ffd23f'; ctx.fill();
+    text(`${total} / 150`, 58, 99, 20, '#ffffff', 900, 'left');
+    drawCoinCount(170, 99);
+    // shop: prepared, switched off during testing
+    const sb = MAP_SHOP;
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.beginPath(); ctx.roundRect(sb.x - sb.w / 2, sb.y - sb.h / 2, sb.w, sb.h, sb.h / 2); ctx.fill();
+    text('SHOP · SOON', sb.x, sb.y + 1, 14, 'rgba(255,255,255,0.45)', 900);
+    const nodes = mapNodes();
+    for (let w = 0; w < 5; w++) {
+      const L = WORLD_LOOKS[w], y0 = 150 + w * 136, open = bestCliff >= w * 10 + 1;
+      const cg = ctx.createLinearGradient(0, y0, 0, y0 + 124);
+      cg.addColorStop(0, L.sky[0]); cg.addColorStop(1, L.sky[1]);
+      ctx.save(); ctx.globalAlpha = open ? 1 : 0.35;
+      ctx.fillStyle = cg; ctx.beginPath(); ctx.roundRect(14, y0, W - 28, 124, 18); ctx.fill();
+      let ws = 0; for (let k = 1; k <= 10; k++) ws += stars[w * 10 + k] || 0;
+      text(`${w + 1}. ${Physics.WORLDS[w].name}`, 30, y0 + 22, 18, '#ffffff', 900, 'left');
+      text(open ? `★ ${ws}/30` : 'LOCKED', W - 30, y0 + 22, 16, open ? '#ffe27a' : '#ffffff', 900, 'right');
+      ctx.restore();
+    }
+    for (const nd of nodes) {
+      const reached = nd.n <= bestCliff, here = nd.n === cliff, boss = nd.k === 9;
+      ctx.save(); ctx.globalAlpha = reached ? 1 : 0.35;
+      ctx.fillStyle = boss ? '#ff8a5c' : reached ? '#ffffff' : 'rgba(255,255,255,0.6)';
+      ctx.beginPath(); ctx.arc(nd.x, nd.y, boss ? 19 : 16, 0, Math.PI * 2); ctx.fill();
+      ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#12141f';
+      ctx.fillText(boss ? 'B' : String(nd.k + 1), nd.x, nd.y + 1);
+      const st = stars[nd.n] || 0;
+      for (let i = 0; i < 3; i++) { starPath(nd.x + (i - 1) * 12, nd.y + 29, 5.5); ctx.fillStyle = i < st ? '#ffd23f' : 'rgba(10,10,25,0.45)'; ctx.fill(); }
+      ctx.restore();
+      if (here) { ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(nd.x, nd.y, 22, 0, Math.PI * 2); ctx.stroke(); }
+    }
+    // PLAY: back to your story cliff
+    const b = MAP_PLAY;
+    ctx.fillStyle = 'rgba(10,10,25,0.45)'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2 + 6, b.w, b.h, b.h / 2); ctx.fill();
+    ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
+    ctx.font = '900 28px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#12141f';
+    ctx.fillText('PLAY ' + cliffLabel(cliff).replace('CLIFF ', ''), b.x, b.y + 1);
+    text('Tap a cliff you reached to replay it for stars', W / 2, 836, 16, 'rgba(255,255,255,0.7)', 700);
+  }
+
   function draw() {
+    if (screen === 'map') {
+      if (ctx.reset) ctx.reset();
+      ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+      drawMap();
+      return;
+    }
     // Start every frame from a clean canvas state, so nothing left over from a previous
     // frame (clip, transparency, transform) can hide the drawing.
     if (ctx.reset) ctx.reset();
@@ -2067,6 +2208,8 @@
 
     drawMuteIcon();
     if (pillVisible()) drawDailyPill();
+    if (mapBtnVisible()) drawMapBtn();
+    if (!s.daily && !s.friend) drawCoinCount(26, 84);
 
     // Game link on the end screens; every recorded clip ends on one, so clips carry it. Web build only.
     if (!IS_PORTAL && roundEnded()) {
@@ -2093,7 +2236,10 @@
       text(s.friend.score === null ? 'YOUR FRIEND FELL OFF' : 'BEAT ' + fmt(s.friend.score), W / 2, 192, 38, '#ffffff', 900);
       text('Same cliff, same speed', W / 2, 232, 20, '#fff3c4', 600);
     } else if (s.cleared) {
-      if (s.worldDone) {
+      if (s.replay) {
+        text('CLIFF CLEARED!', W / 2, 150, 34, '#ffd23f', 900);
+        text(`Replay done · back to ${cliffLabel(cliff)}`, W / 2, 196, 22, '#fff3c4', 800);
+      } else if (s.worldDone) {
         text(`WORLD ${s.world} COMPLETE!`, W / 2, 150, 36, '#7ef9ff', 900);
         text(`Next: ${Physics.WORLDS[Math.min(4, s.world)].name} · hearts refilled`, W / 2, 196, 22, '#fff3c4', 800);
       } else {
@@ -2109,11 +2255,12 @@
         drawHearts(W / 2, 198, s.heartsLeft, true);
       }
     } else {
-      text(Physics.WORLDS[s.world - 1].name, W / 2, 116, 16, 'rgba(255,255,255,0.85)', 800);
+      text(Physics.WORLDS[s.world - 1].name + (s.replay ? ' · REPLAY' : ''), W / 2, 116, 16, 'rgba(255,255,255,0.85)', 800);
       if (s.spec.boss) text(`BOSS · ${cliffLabel(s.cliff).replace('CLIFF ', '')}`, W / 2, 150, 22, '#ff8a5c', 900);
       else text(cliffLabel(s.cliff), W / 2, 150, 20, '#ffd23f', 800);
       text('UNDER ' + fmtTarget(s.target), W / 2, 194, 44, '#ffffff', 900);
-      drawHearts(W / 2, 242, hearts, false);
+      if (!s.replay) drawHearts(W / 2, 242, hearts, false);
+      else text('NO HEARTS LOST IN A REPLAY', W / 2, 242, 15, 'rgba(255,255,255,0.75)', 800);
       const tl = [];
       if (s.spec.wind) {
         const w = s.spec.wind, k = Math.abs(w) <= 0.6 ? 1 : Math.abs(w) <= 1.0 ? 2 : 3;
@@ -2149,14 +2296,17 @@
         // Stop quality on a cleared cliff: PERFECT < GREAT < target, so PERFECT is always also GREAT.
         const G = { PERFECT: ['PERFECT!', 36, '#ffd23f', 900], GREAT: ['GREAT!', 32, '#ffe27a', 900], GOOD: ['GOOD', 28, '#fff3c4', 800] }[s.grade];
         text(G[0], W / 2, 358, G[1], G[2], G[3]);
-        if (s.newBest) text('NEW BEST STOP', W / 2, 394, 18, '#ffd23f', 800);
+        if (s.newBest) text('NEW BEST STOP', W / 2, 238, 18, '#ffd23f', 800);
+        // one row: the stars of this stop, then the coins won
+        drawStarRow(W / 2 - 46, 400, s.stars, 15);
+        if (s.coinsWon) { drawCoin(W / 2 + 50, 400, 11); text('+' + s.coinsWon, W / 2 + 66, 401, 24, '#ffe27a', 900, 'left'); }
       }
       else text(s.newBest ? 'NEW BEST STOP!' : 'from the edge', W / 2, 358, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
-      text(endHint(s.cleared ? `TAP FOR ${cliffLabel(cliff)}` : `TAP TO RETRY ${cliffLabel(cliff)}`, 'TAP TO PLAY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
+      text(endHint(s.cleared ? `TAP FOR ${cliffLabel(cliff)}` : `TAP TO RETRY ${cliffLabel(s.replay ? s.cliff : cliff)}`, 'TAP TO PLAY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
     } else if (s.state === 'falling' || s.state === 'fell') {
       text(s.fallMsg, W / 2, 340, 64, '#ffffff');
       if (s.friend) text(s.friend.score === null ? 'YOU BOTH FELL!' : 'YOUR FRIEND WINS', W / 2, 400, 28, '#fff3c4', 900);
-      text(endHint(`TAP TO RETRY ${cliffLabel(cliff)}`, 'TAP TO TRY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
+      text(endHint(`TAP TO RETRY ${cliffLabel(s.replay ? s.cliff : cliff)}`, 'TAP TO TRY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
     }
     if (shareVisible()) drawShareBtn();
     if (challengeVisible()) drawChallengeBtn();
