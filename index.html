@@ -110,7 +110,9 @@
       { name: 'ROAD', base: 2.0, drag: 0.9 },
       { name: 'ICE',  base: 0.9, drag: 0.45 },
       { name: 'MUD',  base: 4.0, drag: 1.8 },
+      { name: 'SAND', base: 3.0, drag: 1.2 },          // V3 (desert): grippy but slides a bit longer than mud
     ];
+    const BASE_SURFACES = 3;                            // V2 grounds: random, daily and seeded cliffs use only these
 
     // ---- holding from rest ----
     function hold(tau, vmax) {
@@ -218,7 +220,7 @@
       let a = h >>> 0;
       const r = () => { a = (a + 0x6D2B79F5) >>> 0; let x = a; x = Math.imul(x ^ (x >>> 15), x | 1); x ^= x + Math.imul(x ^ (x >>> 7), x | 61); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
       return {
-        si: Math.floor(r() * SURFACES.length),
+        si: Math.floor(r() * BASE_SURFACES),
         dist: Math.round((8 + r() * 5) * 1000) / 1000,
         vmax: Math.round((6 + r() * 3) * 1000) / 1000,
       };
@@ -366,6 +368,17 @@
       // World 1: Green Hills — V2's first 9 cliffs, then the boss: a long downhill slope.
       ...CURATED.slice(0, 9).map(c => spec(c)),
       spec({ si: 0, dist: 16, vmax: 8, slope: 0.1, boss: true }),   // 10 BOSS: long downhill, the slope keeps pulling
+      // World 2: Desert — wind (constant, shown by arrows and the flag) and sand. si 3 = SAND.
+      spec({ si: 0, dist: 10, vmax: 7,   wind: -0.5 }),             // 11 checkpoint: a light head wind on road
+      spec({ si: 3, dist: 11, vmax: 7 }),                           // 12 first sand, no wind
+      spec({ si: 0, dist: 12, vmax: 7.5, wind: 0.6 }),              // 13 first tail wind: slides further
+      spec({ si: 3, dist: 12, vmax: 8,   wind: -0.8 }),             // 14 sand with a head wind
+      spec({ si: 2, dist: 11, vmax: 8,   wind: 0.8 }),              // 15 mud pushed by a tail wind
+      spec({ si: 3, dist: 12, vmax: 7,   wind: 0.5 }),              // 16 checkpoint: gentle tail wind on sand
+      spec({ si: 1, dist: 12, vmax: 6.5, wind: -0.6 }),             // 17 ice, the head wind helps you stop
+      spec({ si: 0, dist: 13, vmax: 8.5, wind: 1.0 }),              // 18 strong tail wind on road
+      spec({ si: 3, dist: 13, vmax: 9,   wind: -1.0 }),             // 19 strong head wind, fast sand
+      spec({ si: 3, dist: 14, vmax: 8.5, wind: 1.2, fog: 0.3, boss: true }),   // 20 BOSS sandstorm: strongest tail wind, blowing sand
     ];
     function worldOf(n) { return Math.min(WORLDS.length, Math.floor((n - 1) / 10) + 1); }
     // Spec for story cliff n. Worlds not built yet fall back to the seeded V2 cliffs.
@@ -388,6 +401,7 @@
     ROAD: { top: '#6a6e84', side: '#3d4052', dust: '#c9cbd6' },
     ICE:  { top: '#d4f1ff', side: '#7cc4e6', dust: '#ffffff' },
     MUD:  { top: '#8a5a33', side: '#5e3b1f', dust: '#a8774a' },
+    SAND: { top: '#e3b866', side: '#b4843a', dust: '#f2d491' },
   };
   const SURFACES = Physics.SURFACES.map(p => Object.assign({}, p, SURFACE_LOOK[p.name]));
 
@@ -491,7 +505,7 @@
     if (!IS_PORTAL && c.length === 3 && c.every(Number.isInteger)) {   // platform build: no external challenge links
       const si = c[0], dist = c[1] / 1000, vmax = c[2] / 1000;
       const score = sc === 'x' ? null : Number(sc) / 10;
-      const okRound = si >= 0 && si < SURFACES.length && dist >= 8 && dist <= 13 && vmax >= 6 && vmax <= 9;
+      const okRound = si >= 0 && si < 3 && dist >= 8 && dist <= 13 && vmax >= 6 && vmax <= 9;
       const okScore = sc === 'x' || (sc !== null && Number.isFinite(score) && score >= 0 && score <= 1300);
       if (okRound && okScore) friend = { si, dist, vmax, score, tries: 0, won: false };
     }
@@ -564,7 +578,7 @@
 
   function newRound() {
     // Rounded to the millimetre so a challenge link reproduces the round exactly.
-    let si = Math.floor(Math.random() * SURFACES.length);
+    let si = Math.floor(Math.random() * 3);   // the three V2 grounds
     let dist = Math.round((8 + Math.random() * 5) * 1000) / 1000;   // meters from car front to edge
     let vmax = Math.round((6 + Math.random() * 3) * 1000) / 1000;
     let fr = null, daily = false, sp = null;
@@ -773,7 +787,7 @@
       skid = { bf, sg };
     }
 
-    const SKID = { ROAD: { f: 1800, q: 2, vol: 0.22 }, ICE: { f: 3400, q: 9, vol: 0.16 }, MUD: { f: 380, q: 1, vol: 0.35 } };
+    const SKID = { ROAD: { f: 1800, q: 2, vol: 0.22 }, ICE: { f: 3400, q: 9, vol: 0.16 }, MUD: { f: 380, q: 1, vol: 0.35 }, SAND: { f: 900, q: 1.2, vol: 0.3 } };
 
     function update(st) {
       if (!ac) return;
@@ -1780,6 +1794,25 @@
     } catch (e) {}
   }
 
+  // Wind you can read: streaks move with the wind (tail wind = toward the edge), faster and more of
+  // them when it is stronger. Constant for the whole cliff, like the physics.
+  function drawWind(w, storm) {
+    const now = performance.now() / 1000, dir = Math.sign(w), a = Math.abs(w);
+    const n = Math.round(6 + 10 * a) + (storm ? 18 : 0), speed = 140 + 260 * a, len = 26 + 22 * a;
+    ctx.save();
+    ctx.strokeStyle = storm ? 'rgba(255,236,190,0.6)' : 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 3; ctx.lineCap = 'round';
+    for (let i = 0; i < n; i++) {
+      const y = 70 + ((i * 131.7) % 700), sp = speed * (0.75 + 0.5 * ((i * 0.37) % 1));
+      let x = ((i * 97.3 + now * sp) % (W + 160)) - 80;
+      if (dir < 0) x = W - x;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - dir * len, y); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  // Blowing sand over the world on the sandstorm cliff (light, the edge stays readable)
+  function drawStormHaze() { ctx.fillStyle = 'rgba(236,190,120,0.2)'; ctx.fillRect(0, 0, W, H); }
+
   // Story cliffs are named by world: cliff 17 is "CLIFF 2-7".
   function cliffLabel(n) { const w = Math.floor((n - 1) / 10) + 1, k = (n - 1) % 10 + 1; return `CLIFF ${w}-${k}`; }
 
@@ -1808,6 +1841,7 @@
       ctx.beginPath(); ctx.arc(122, 142, 22, 0, Math.PI * 2); ctx.fill();
     }
     if (Z.bg) drawBackdrop(Z);
+    if (s.spec.wind && !s.daily && !s.friend) drawWind(s.spec.wind, s.spec.fog && s.world === 2);
     if (Z !== lastZone) { lastZone = Z; setPageSky(Z); }
 
     // world (camera space)
@@ -1838,8 +1872,10 @@
     ctx.fillRect(EDGE_X - 3, GROUND_Y - 30, 3, 30);
     ctx.fillStyle = '#ff3355';
     ctx.beginPath();
+    // the flag shows the wind: it points away from where the wind comes from
+    const fd = (s.spec.wind || 0) < 0 ? -1 : 1;
     ctx.moveTo(EDGE_X - 3, GROUND_Y - 30);
-    ctx.lineTo(EDGE_X + 19, GROUND_Y - 24);
+    ctx.lineTo(EDGE_X - 3 + 22 * fd, GROUND_Y - 24);
     ctx.lineTo(EDGE_X - 3, GROUND_Y - 18);
     ctx.fill();
 
@@ -1868,6 +1904,7 @@
     ctx.globalAlpha = 1;
     ctx.restore();
 
+    if (s.spec.fog && s.world === 2 && !s.daily && !s.friend) drawStormHaze();
     // HUD (screen space)
     text('BEST ' + cliffLabel(bestCliff).replace('CLIFF ', ''), 26, 50, 22, '#ffffff', 800, 'left');
 
@@ -1920,6 +1957,10 @@
       else text(cliffLabel(s.cliff), W / 2, 150, 20, '#ffd23f', 800);
       text('UNDER ' + fmtTarget(s.target), W / 2, 194, 44, '#ffffff', 900);
       drawHearts(W / 2, 242, hearts, false);
+      if (s.spec.wind) {
+        const w = s.spec.wind, k = Math.abs(w) <= 0.6 ? 1 : Math.abs(w) <= 1.0 ? 2 : 3;
+        text(w > 0 ? 'TAIL WIND ' + '›'.repeat(k) : '‹'.repeat(k) + ' HEAD WIND', W / 2, 280, 20, '#ffffff', 900);
+      }
     }
 
     if (s.state === 'ready') {
