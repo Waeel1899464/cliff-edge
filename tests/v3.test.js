@@ -110,6 +110,122 @@ const seed = (cur, cp, best, extra = '') => IN_PAGE + HELP + `localStorage.setIt
       check('coins: a GOOD near the target line pays little, a GREAT close to the edge pays more', r.ga === 'GOOD' && r.gc === 'GREAT' && r.great > r.good, `GOOD ${r.good}, GREAT ${r.great}`);
       await ctx.close();
     }
+    // ---- rescue, golden heart, helpers, rewards (all through requestReward) ----
+    {
+      const { page, ctx, errors } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(7, 6, 7, "localStorage.setItem('cg3_cliff_hearts','1');") });
+      const r = await page.evaluate(() => {
+        const out = {}, k = n => localStorage.getItem('cg3_cliff_' + n), rw = () => JSON.parse(localStorage.getItem('cg3_cliff_rewards') || '{}');
+        const frames = n => { for (let i = 0; i < n; i++) window.__frame(16); };
+        // 1) last heart lost -> offer -> SAVE ME -> animation -> same cliff, heart kept
+        window.__play(-999); frames(2);
+        let s = window.__cliff();
+        out.offer = s.rescue && s.rescue.state === 'offer' && s.rescue.t0 !== null && k('hearts') === '1';
+        window.__tap(270, 470); frames(1);
+        out.anim = window.__cliff().rescue && window.__cliff().rescue.state === 'anim';
+        window.__tap(270, 700);                       // taps during the animation are ignored
+        frames(160);
+        s = window.__cliff();
+        out.saved = s.cliff === 7 && s.state === 'ready' && k('hearts') === '1' && k('cur') === '7' && rw().rescue === 1;
+        // 2) a second rescue by stopping short (rewind of the car)
+        window.__play(window.__cliff().target + 10); frames(2);
+        window.__tap(270, 470); frames(130);
+        out.second = window.__cliff().cliff === 7 && rw().rescue === 2 && k('hearts') === '1';
+        // 3) daily limit reached: no offer any more, back to the checkpoint as before
+        window.__play(-999); frames(2);
+        s = window.__cliff();
+        out.limit = !s.rescue && s.backTo === 6 && k('cur') === '6';
+        window.__next();
+        // 4) helpers: after 2 failures in a row on the same cliff
+        out.noHelperYet = !(window.__cliff().state === 'ready' && window.__cliff().helper);
+        window.__play(-999); window.__next(); window.__play(-999); window.__next();
+        s = window.__cliff();
+        const tIdeal = window.__physics.releaseS(Math.min(s.target / 2, 50) / 100, s.spec);
+        window.__tap(270 - 118, 392);                 // CRYSTAL BALL
+        s = window.__cliff();
+        out.ball = s.helper === 'ball' && Math.abs(s.idealFront - (s.x0 + 1.6 + window.__physics.holdS(tIdeal, s.spec).d)) < 1e-9 && rw().helper === 1;
+        // letting go exactly at the shown point stops in the middle of the zone
+        const rr = window.__play(s.target / 2);
+        out.ballWorks = rr.cleared;
+        window.__next();
+        // helper limit (1 a day): fail twice again, no helper buttons
+        window.__play(-999); window.__next(); window.__play(-999); window.__next();
+        window.__tap(270, 392);
+        out.helperLimit = !window.__cliff().helper;
+        return out;
+      });
+      check('rescue: offered only when the last heart is lost (story mode)', r.offer);
+      check('rescue: SAVE ME plays an animation (taps ignored meanwhile), then the same cliff with the heart kept', r.anim && r.saved);
+      check('rescue works after a short stop too (rewind), counted in the daily limit', r.second);
+      check('rescue: after 2 a day no offer, back to the checkpoint as before', r.limit);
+      check('helpers appear only after 2 failures in a row; crystal ball shows the exact ideal release point', r.noHelperYet && r.ball);
+      check('crystal ball: letting go at the shown point clears the cliff', r.ballWorks);
+      check('helpers: 1 a day', r.helperLimit);
+      check('no page errors (rescue, helpers)', errors.length === 0, errors.join(' | '));
+      await ctx.close();
+    }
+    // golden heart, double coins, slow motion exactness, sandbag, no rewards in the daily
+    {
+      const { page, ctx, errors } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(2, 1, 2) });
+      const r = await page.evaluate(() => {
+        const out = {}, k = n => localStorage.getItem('cg3_cliff_' + n);
+        const c0 = +(k('coins') || 0);
+        let s = window.__play(0.5);                        // PERFECT with 3 hearts -> golden 4th heart
+        out.golden = s.heartWon && k('hearts') === '4';
+        const won = s.coinsWon;
+        window.__tap(270, 452);                            // DOUBLE COINS
+        out.double = window.__cliff().coinsWon === won * 2 && +k('coins') === c0 + won * 2;
+        window.__next();
+        // slow motion: exact time map, invertible
+        s = window.__cliff();
+        s.warp = { a: 0.5, b: 1.2, k: 0.35 };
+        const gameTau = r2 => { const w = s.warp, len = (w.b - w.a) / w.k; return r2 <= w.a ? r2 : r2 <= w.a + len ? w.a + (r2 - w.a) * w.k : w.b + (r2 - w.a - len); };
+        out.warpMono = [0.2, 0.9, 1.5, 3.5].every((x, i, a) => i === 0 || gameTau(x) > gameTau(a[i - 1]));
+        s.warp = null;
+        // sandbag: grippy mud before the edge, same target
+        const T0 = s.target;
+        s.spec = Object.assign({}, s.spec, { patches: [{ at: s.dist - 1.6, si: 2 }] });
+        out.sandbag = window.__physics.segments(s.spec).slice(-1)[0].si === 2 && s.target === T0;
+        return out;
+      });
+      check('golden heart: a 3-star stop gives a 4th (golden) heart', r.golden);
+      check('double coins: doubles the coins of that stop (counted in the daily limit)', r.double);
+      check('slow motion: the time map only slows, never reverses', r.warpMono);
+      check('sandbag: grippy ground before the edge, target unchanged', r.sandbag);
+      await ctx.close();
+    }
+    // slow motion in the real game: identical result at 30 and 144 Hz with the warp active
+    {
+      const res = [];
+      for (const rate of [30, 144]) {
+        const { page, ctx } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(9, 6, 9) });
+        res.push(await page.evaluate((dt) => {
+          const s = window.__cliff(), P = window.__physics;
+          s.helper = 'slow'; s.warp = { a: 0.7, b: 1.6, k: 0.35 };
+          const holdReal = 1900.37;                     // ms of real time
+          const tp = window.__T(); window.__ptr('pointerdown', tp); let rel = false;
+          for (let i = 0; i < 3000; i++) {
+            if (!rel && window.__T() + dt >= tp + holdReal) { window.__advance(tp + holdReal - window.__T()); window.__ptr('pointerup', tp + holdReal); rel = true; }
+            window.__frame(dt);
+            if (['stopped', 'falling'].includes(window.__cliff().state)) break;
+          }
+          return window.__cliff().state + ':' + (window.__cliff().result || 0).toFixed(9);
+        }, 1000 / rate));
+        await ctx.close();
+      }
+      check('slow motion helper: same result at 30 and 144 Hz (exact time map)', res[0] === res[1], res.join(' / '));
+    }
+    // no rescue or helpers in the daily challenge
+    {
+      const { page, ctx } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(7, 6, 7, "localStorage.setItem('cg3_cliff_hearts','1');") });
+      const r = await page.evaluate(() => {
+        window.__tap(390, 50);                          // DAILY pill
+        const d = window.__cliff().daily;
+        window.__play(-999); for (let i = 0; i < 3; i++) window.__frame(16);
+        return { d, rescue: !!window.__cliff().rescue };
+      });
+      check('daily challenge: no rescue offered (competition stays pure)', r.d && !r.rescue);
+      await ctx.close();
+    }
   } finally { await b.close(); srv.close(); }
   process.exit(summary() ? 1 : 0);
 })();

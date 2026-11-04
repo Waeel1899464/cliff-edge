@@ -544,7 +544,8 @@
   const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.floor(Number(v) || lo)));
   let cliff = clampInt(load('cliff_cur', 1), 1, 100000);          // cliff being played
   let checkpoint = clampInt(load('cliff_cp', 1), 1, cliff);       // where a lost life sends you back to
-  let hearts = clampInt(load('cliff_hearts', HEARTS), 1, HEARTS);
+  const MAX_HEARTS = 4;      // 3 hearts + 1 golden heart (earned with a 3-star stop)
+  let hearts = clampInt(load('cliff_hearts', HEARTS), 1, MAX_HEARTS);
   let roundsPlayed = clampInt(load('cliff_rounds', 0), 0, 1e9);
   let bestCliff = clampInt(load('cliff_bestcliff', 1), cliff, 100000);   // the number players compete on
   // V3: stars per story cliff (best result kept: GOOD 1, GREAT 2, PERFECT 3) and coins (cosmetic only:
@@ -653,6 +654,74 @@
     return { send };
   })();
 
+  // ---------- Rewards: ONE entry point for every bonus (future rewarded ads plug in here only) ----------
+  // Today every reward is granted at once, free, with a small daily limit. Later the CrazyGames SDK
+  // rewarded ad is called inside requestReward and onGranted runs only when the ad completes.
+  // Rules kept: a reward button only appears when it has a real effect and the limit allows it;
+  // no rewards at all in the daily challenge, friend challenges or Endless (competition stays pure).
+  const REWARD_LIMITS = { rescue: 2, helper: 1, double: 3, heart: 1, box: 5 };
+  function rewardsToday() { const d = loadJSON('cliff_rewards'); return d && d.day === dayKey() ? d : { day: dayKey() }; }
+  function rewardLeft(kind) { return (REWARD_LIMITS[kind] || 0) - (rewardsToday()[kind] || 0); }
+  function storyRound() { return mode === 'run' && !s.daily && !s.friend && !s.endless && ASSIST; }
+  function requestReward(kind, onGranted) {
+    if (rewardLeft(kind) <= 0) return false;
+    const d = rewardsToday(); d[kind] = (d[kind] || 0) + 1; saveJSON('cliff_rewards', d);
+    Track.send('reward_' + kind, s.cliff);      // web build only (tracking is off in the platform build)
+    onGranted();
+    return true;
+  }
+  let stuck = { n: 0, fails: 0 };               // failures in a row on the same story cliff (this session)
+  let rescueCount = 0;
+  const RESCUES = ['rewind', 'balloon', 'seagull', 'parachute'];
+  const HELPERS = [
+    { id: 'ball', name: 'CRYSTAL BALL' }, { id: 'slow', name: 'SLOW MOTION' }, { id: 'sandbag', name: 'SANDBAG' },
+  ];
+  function helperVisible() { return screen === 'game' && s.state === 'ready' && storyRound() && !s.helper && stuck.n === s.cliff && stuck.fails >= 2 && rewardLeft('helper') > 0; }
+  function helperBtn(i) { return { x: W / 2 + (i - 1) * 118, y: 392, w: 104, h: 74 }; }
+  function useHelper(id) {
+    requestReward('helper', () => {
+      s.helper = id;
+      const tIdeal = Physics.releaseS(Math.min(s.target / 2, 50) / 100, s.spec);   // the middle of the zone
+      if (id === 'ball') s.idealFront = s.x0 + CAR_LEN + Physics.holdS(tIdeal, s.spec).d;   // where to let go
+      if (id === 'slow') s.warp = { a: Math.max(0, tIdeal - 0.6), b: tIdeal + 0.4, k: 0.35 };
+      if (id === 'sandbag') {   // grippy mud on the last 1.6 m: easier to stop; the target stays the same
+        s.spec = Object.assign({}, s.spec, { patches: s.spec.patches.filter(p => p.at < s.dist - 1.6).concat([{ at: s.dist - 1.6, si: 2 }]) });
+      }
+      Sound.ding();
+    });
+  }
+  function rescueAllowed() { return storyRound() && !s.replay && rewardLeft('rescue') > 0; }
+  const RESCUE_BTN = { x: W / 2, y: 470, w: 250, h: 70 };
+  function rescueBtnVisible() { return screen === 'game' && s.rescue && s.rescue.state === 'offer' && s.rescue.t0 !== null; }
+  function acceptRescue() {
+    requestReward('rescue', () => {
+      const kind = s.parts ? RESCUES[rescueCount++ % RESCUES.length] : 'rewind';
+      s.rescue = { state: 'anim', kind, t0: performance.now(), dur: kind === 'parachute' ? 2.2 : 1.8, from: s.parts ? s.parts[0] && { x: Math.min(s.parts[0].x, edgePx() + 80), y: Math.min(s.parts[0].y, WATER_Y + 10) } : null, stopX: s.x };
+      s.missed = false; s.heartsLeft = hearts;
+      if (kind === 'rewind') Sound.screamBack(); else Sound.ding();
+    });
+  }
+  function declineRescue() { if (s.rescue && s.rescue.state === 'offer') { s.rescue.state = 'declined'; applyMiss(); } }
+  // double coins after a good stop, one extra heart when only one is left, a mystery box after a boss
+  const DOUBLE_BTN = { x: W / 2, y: 452, w: 200, h: 44 };
+  function doubleVisible() { return screen === 'game' && s.state === 'stopped' && s.cleared && storyRound() && !s.doubled && s.coinsWon >= 5 && rewardLeft('double') > 0 && !boxVisible(); }
+  const HEART_BTN = { x: W / 2 + 112, y: 242, w: 84, h: 36 };
+  function heartBtnVisible() { return screen === 'game' && s.state === 'ready' && storyRound() && !s.replay && hearts === 1 && !s.extraHeart && rewardLeft('heart') > 0; }
+  const BOX_BTN = { x: W / 2, y: 452, w: 220, h: 48 };
+  function boxVisible() {
+    if (!(screen === 'game' && s.state === 'stopped' && s.worldDone && !s.boxCoins && rewardLeft('box') > 0)) return false;
+    const opened = loadJSON('cliff_boxes') || {};
+    return !opened[s.world];
+  }
+  function openBox() {
+    requestReward('box', () => {
+      const opened = loadJSON('cliff_boxes') || {}; opened[s.world] = 1; saveJSON('cliff_boxes', opened);
+      s.boxCoins = 40 + 20 * s.world + Math.floor(Math.random() * 41);     // coins only (cosmetic currency)
+      coins += s.boxCoins; save('cliff_coins', coins);
+      puff(EDGE_X - 40, GROUND_Y - 80, 30, '#ffd23f', 200, 300, 5, 1.0); Sound.perfect();
+    });
+  }
+
   // Story targets are the same every time for a given cliff: compute once (a few ms), then reuse.
   const targetCache = {};
   function storyTargetCached(n, sp) {
@@ -722,6 +791,12 @@
     if (challengeVisible() && inBtn(CHALLENGE_BTN, lx, ly)) { pendingChallenge = true; return; }
     if (shareVisible() && inShareBtn(lx, ly)) { pendingShare = true; return; }
     if (screen === 'map') { mapTap(lx, ly); return; }
+    if (rescueBtnVisible() && inBtn(RESCUE_BTN, lx, ly)) { acceptRescue(); return; }
+    if (s.rescue && s.rescue.state === 'anim') return;
+    if (helperVisible()) for (let i = 0; i < 3; i++) if (inBtn(helperBtn(i), lx, ly)) { useHelper(HELPERS[i].id); return; }
+    if (doubleVisible() && inBtn(DOUBLE_BTN, lx, ly)) { requestReward('double', () => { coins += s.coinsWon; save('cliff_coins', coins); s.coinsWon *= 2; s.doubled = true; Sound.ding(); }); return; }
+    if (heartBtnVisible() && inBtn(HEART_BTN, lx, ly)) { requestReward('heart', () => { hearts++; saveProgress(); s.heartsLeft = hearts; s.extraHeart = true; Sound.ding(); }); return; }
+    if (boxVisible() && inBtn(BOX_BTN, lx, ly)) { openBox(); return; }
     if (pillVisible() && inBtn(DAILY_PILL, lx, ly + 0)) { toggleDaily(); return; }
     if (mapBtnVisible() && inBtn(MAP_BTN, lx, ly)) { openMap(); return; }
     pressGame(e.pointerId, evT(e));
@@ -750,13 +825,15 @@
       if (typeof id === 'number') { try { canvas.setPointerCapture(id); } catch (err) {} }
       s.state = 'holding';
       s.tPress = t === undefined ? now : t;
-      s.crossAt = s.tPress + Physics.holdTimeForS(Physics.edgeAt(s.spec, Infinity), s.spec) * 1000;   // still holding then = over the edge
+      s.crossAt = s.tPress + realOf(Physics.holdTimeForS(Physics.edgeAt(s.spec, Infinity), s.spec)) * 1000;   // still holding then = over the edge
       roundsPlayed++; save('cliff_rounds', roundsPlayed);
       Track.send(s.daily ? 'daily' : 'round', s.daily ? s.dailyTry : s.cliff);
       Rec.start(s.id);
       return;
     }
+    if (s.rescue && s.rescue.state === 'anim') return;
     if ((s.state === 'stopped' || s.state === 'fell' || s.state === 'falling') && now - s.endAt > 300) {
+      if (s.rescue && s.rescue.state === 'offer') declineRescue();   // any other tap: no rescue, instant retry
       if (s.replay && s.cleared) replay = null;              // replay done: back to your story cliff
       newRound();
     }
@@ -773,7 +850,7 @@
   function releaseAt(t) {
     t = Math.max(s.tPress, t);
     if (t >= s.crossAt) return;                       // already past the edge: the fall is certain
-    const h = Physics.holdS((t - s.tPress) / 1000, s.spec);
+    const h = Physics.holdS(gameTau((t - s.tPress) / 1000), s.spec);
     const plan = Physics.slidePlan(h.d, h.v, s.spec);                // the whole slide, piece by piece
     const E = Physics.edgeAt(s.spec, plan.stopX);                    // edge after any pieces break off
     s.state = 'sliding';
@@ -786,11 +863,23 @@
   // Car position and speed at time t (ms), straight from the equations.
   function motionAt(t) {
     if (s.state === 'holding' || t < s.tRel) {
-      const h = Physics.holdS((t - s.tPress) / 1000, s.spec);
+      const h = Physics.holdS(gameTau((t - s.tPress) / 1000), s.spec);
       return { d: h.d, v: h.v, a: h.v > 0 ? h.a : 0 };
     }
     return Physics.planAt(s.plan, (t - s.tRel) / 1000);              // d = metres travelled
   }
+  // Slow-motion helper: around the ideal release moment the hold runs at a slower rate. It is an
+  // exact, invertible time map (real seconds <-> hold seconds), so timing stays precise at any frame rate.
+  function gameTau(r) {
+    const w = s.warp; if (!w) return r;
+    const len = (w.b - w.a) / w.k;
+    return r <= w.a ? r : r <= w.a + len ? w.a + (r - w.a) * w.k : w.b + (r - w.a - len);
+  }
+  function realOf(tau) {
+    const w = s.warp; if (!w) return tau;
+    return tau <= w.a ? tau : tau <= w.b ? w.a + (tau - w.a) / w.k : w.a + (w.b - w.a) / w.k + (tau - w.b);
+  }
+  function inSlowMo() { if (!s.warp || s.state !== 'holding') return false; const g = gameTau((performance.now() - s.tPress) / 1000); return g > s.warp.a && g < s.warp.b; }
   // metres travelled by the car front, and the gap to the edge right now (the edge can move)
   function travel() { return frontX() - (s.x0 + CAR_LEN); }
   function gapNow() { return Physics.edgeAt(s.spec, travel()) - travel(); }
@@ -933,6 +1022,16 @@
       o.start(t); lfo.start(t); o.stop(t + 1.6); lfo.stop(t + 1.6);
     }
 
+    // the rewind rescue: the scream played "backwards" (pitch rising instead of falling)
+    function screamBack() {
+      if (!ac) return;
+      const t = ac.currentTime;
+      const o = ac.createOscillator(); o.type = 'sawtooth';
+      o.frequency.setValueAtTime(260, t); o.frequency.exponentialRampToValueAtTime(640, t + 1.3);
+      const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 5;
+      const g = ac.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.9, t + 1.1); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.4);
+      o.connect(bp); bp.connect(g); g.connect(master); o.start(t); o.stop(t + 1.5);
+    }
     function splash() {
       if (!ac) return;
       const t = ac.currentTime;
@@ -985,7 +1084,7 @@
       return recDest.stream.getAudioTracks()[0] || null;
     }
 
-    return { init, update, scream, splash, ding, bloop, fanfare, great, perfect, pop, toggleMute, streamTrack, isMuted: () => muted };
+    return { init, update, scream, screamBack, splash, ding, bloop, fanfare, great, perfect, pop, toggleMute, streamTrack, isMuted: () => muted };
   })();
 
   // ---------- Clip recorder: each round is recorded as a vertical video ----------
@@ -1334,6 +1433,13 @@
   // A missed cliff: lose a heart and retry it; with no hearts left, go back to the checkpoint.
   function missCliff() {
     s.missed = true;
+    stuck = stuck.n === s.cliff ? { n: s.cliff, fails: stuck.fails + 1 } : { n: s.cliff, fails: 1 };
+    // The last heart is about to go: offer a rescue first (story mode only). Nothing changes until the
+    // player chooses: "Save me!" keeps the heart; any other tap (or 3 seconds) goes back as usual.
+    if (hearts <= 1 && rescueAllowed()) { s.rescue = { state: 'offer', t0: null }; s.heartsLeft = 0; return; }
+    applyMiss();
+  }
+  function applyMiss() {
     hearts--;
     if (hearts <= 0) { cliff = checkpoint; hearts = HEARTS; s.backTo = checkpoint; }
     s.heartsLeft = hearts;
@@ -1352,7 +1458,7 @@
     rememberTry(false);
     fallsThisSession++;
     s.fallTiming = fallsThisSession === 1 ? FALL_FULL : FALL_SHORT;
-    if (!s.friend && !s.daily) { if (s.replay) s.missed = true; else missCliff(); }
+    if (!s.friend && !s.daily) { if (s.replay) { s.missed = true; stuck = stuck.n === s.cliff ? { n: s.cliff, fails: stuck.fails + 1 } : { n: s.cliff, fails: 1 }; } else missCliff(); }
     s.state = 'falling';
     s.endAt = performance.now();
     s.fallT = 0;
@@ -1421,6 +1527,7 @@
       }
     }
     if (s.splashed && s.fallT - s.splashAt > s.fallTiming.end) s.state = 'fell';
+    if (!s.rescue || s.rescue.state === 'offer') (s.rec = s.rec || []).push(s.parts.map(p => [p.x, p.y, p.rot]));
   }
 
   // ---------- Update ----------
@@ -1473,11 +1580,13 @@
             s.stars = STAR_OF[s.grade];
             if (s.stars > (stars[s.cliff] || 0)) { stars[s.cliff] = s.stars; s.newStars = true; saveJSON('cliff_stars', stars); }
             s.coinsWon = coinReward(s.result, s.target, s.grade);
+            stuck = { n: 0, fails: 0 };
             coins += s.coinsWon; save('cliff_coins', coins);
             if (!s.replay) {
               if (s.spec.boss) s.worldDone = true;
               cliff++;
-              if (isCheckpoint(cliff)) { checkpoint = cliff; hearts = HEARTS; s.newCp = true; }
+              if (s.stars === 3 && hearts < MAX_HEARTS) { hearts++; s.heartWon = true; }   // golden heart: reward for skill
+              if (isCheckpoint(cliff)) { checkpoint = cliff; hearts = Math.max(hearts, HEARTS); s.newCp = true; }
               if (cliff > bestCliff) { bestCliff = cliff; s.newBestCliff = true; }
               saveProgress();
             }
@@ -1485,6 +1594,7 @@
             puff(EDGE_X - 30, GROUND_Y - 40, 20, '#ff4f7b', 160, 380, 4, 1.1);
           } else if (s.replay) {
             s.missed = true;
+            stuck = stuck.n === s.cliff ? { n: s.cliff, fails: stuck.fails + 1 } : { n: s.cliff, fails: 1 };
           } else {
             missCliff();
           }
@@ -1496,8 +1606,23 @@
         else if (s.newBest || s.result < 10) Sound.ding();
         else Sound.bloop();
       }
-    } else if (s.state === 'falling' || s.state === 'fell') {
+    } else if ((s.state === 'falling' || s.state === 'fell') && !(s.rescue && s.rescue.state === 'anim')) {
       updateFall(dt);
+    }
+    // rescue: 3-second offer once the round has ended, then the chosen animation
+    if (s.rescue) {
+      const R = s.rescue;
+      if (R.state === 'offer') {
+        if (R.t0 === null && roundEnded()) R.t0 = now;
+        if (R.t0 !== null && now - R.t0 > 3000) declineRescue();
+      } else if (R.state === 'anim' && R.kind === 'rewind' && !s.parts) {
+        const k = Math.min(1, (now - R.t0) / (R.dur * 1000));
+        s.x = R.stopX + (s.x0 - R.stopX) * (k * k * (3 - 2 * k));
+      }
+      if (R.state === 'anim' && now - R.t0 > R.dur * 1000) {
+        R.state = 'done';
+        newRound();                       // same cliff, the heart is kept
+      }
     }
 
     // Body pitch spring
@@ -1533,7 +1658,9 @@
     const rearPx = s.x * PPM;
     const zFar = rearPx < 12 ? Math.max(0.36, (CAM_ANCHOR_X - 12) / (CAM_ANCHOR_X - rearPx)) : 1;
     let zt = zFar, ft = CAM_ANCHOR_X, fyt = GROUND_Y;
-    if (s.parts) {
+    if (s.rescue && s.rescue.state === 'anim' && s.rescue.kind !== 'rewind') {
+      zt = 1; ft = CAM_ANCHOR_X; fyt = GROUND_Y;          // the whole scene: cliff, sea and the rescue
+    } else if (s.parts) {
       // Follow the falling body down to the splash, zoomed in.
       const b = s.parts[0];
       zt = 2;
@@ -1731,7 +1858,7 @@
 
   // Hearts row; `lost` also shows the spent hearts as empty outlines.
   function drawHearts(cx, cy, n, lost) {
-    const total = HEARTS, gap = 40, x0 = cx - (total - 1) * gap / 2;
+    const total = n > HEARTS ? MAX_HEARTS : HEARTS, gap = 40, x0 = cx - (total - 1) * gap / 2;
     for (let i = 0; i < total; i++) {
       const full = i < n;
       ctx.save(); ctx.translate(x0 + i * gap, cy + 2); ctx.scale(1.6, 1.6);
@@ -1741,7 +1868,7 @@
       ctx.bezierCurveTo(8, -12, 12, -2, 0, 6);
       ctx.closePath();
       ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(10,10,25,0.75)'; ctx.stroke();
-      ctx.fillStyle = full ? '#ff4f7b' : 'rgba(255,255,255,0.18)';
+      ctx.fillStyle = full ? (i >= HEARTS ? '#ffd23f' : '#ff4f7b') : 'rgba(255,255,255,0.18)';
       ctx.fill();
       ctx.restore();
     }
@@ -1979,6 +2106,84 @@
     });
   }
 
+  function drawPillBtn(b, label, fill, ink, size) {
+    ctx.fillStyle = 'rgba(10,10,25,0.45)'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2 + 4, b.w, b.h, b.h / 2); ctx.fill();
+    ctx.fillStyle = fill; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
+    ctx.font = `900 ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = ink; ctx.fillText(label, b.x, b.y + 1);
+  }
+  function drawRescueBtn() {
+    const b = RESCUE_BTN, left = Math.max(0, 1 - (performance.now() - s.rescue.t0) / 3000);
+    const pulse = 1 + 0.04 * Math.sin(performance.now() / 90);
+    ctx.save(); ctx.translate(b.x, b.y); ctx.scale(pulse, pulse); ctx.translate(-b.x, -b.y);
+    drawPillBtn(b, 'SAVE ME!', '#ffd23f', '#12141f', 30);
+    ctx.restore();
+    // countdown ring
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(b.x + b.w / 2 + 30, b.y, 18, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left); ctx.stroke();
+    text(`${rewardLeft('rescue')} left today`, b.x, b.y + 54, 15, 'rgba(255,255,255,0.75)', 800);
+  }
+  function drawHelpers() {
+    text('STUCK? ONE HELPER FOR ONE TRY', W / 2, 340, 16, '#ffffff', 900);
+    HELPERS.forEach((h, i) => {
+      const b = helperBtn(i);
+      ctx.fillStyle = 'rgba(10,10,25,0.55)'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, 18); ctx.fill();
+      ctx.save(); ctx.translate(b.x, b.y - 10);
+      if (h.id === 'ball') { ctx.fillStyle = '#b48cff'; ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.beginPath(); ctx.arc(-5, -5, 4, 0, Math.PI * 2); ctx.fill(); }
+      else if (h.id === 'slow') { ctx.fillStyle = '#7ed957'; ctx.beginPath(); ctx.ellipse(0, 2, 15, 10, 0, Math.PI, 0); ctx.fill(); ctx.fillRect(-15, 1, 30, 4); ctx.beginPath(); ctx.arc(17, -1, 5, 0, Math.PI * 2); ctx.fill(); }
+      else { ctx.fillStyle = '#c7955a'; ctx.beginPath(); ctx.roundRect(-16, -2, 15, 12, 4); ctx.roundRect(1, -2, 15, 12, 4); ctx.roundRect(-8, -12, 15, 12, 4); ctx.fill(); }
+      ctx.restore();
+      text(h.name, b.x, b.y + 22, 11, '#ffffff', 900);
+    });
+  }
+  // Rescue animations (story mode, last heart): funny and short, then the same cliff again.
+  function drawRescue() {
+    const R = s.rescue, k = Math.min(1, (performance.now() - R.t0) / (R.dur * 1000));
+    const ease = x => x * x * (3 - 2 * x), lerp = (a, b, x) => a + (b - a) * x;
+    const body = (x, y, rot) => { ctx.save(); ctx.translate(x, y); ctx.rotate(rot); drawBody(false, k < 0.85 ? 'scared' : 'happy'); ctx.restore(); };
+    const ex = edgePx(), home = { x: ex - 60, y: GROUND_Y - WHEEL_R - CAR_H / 2 - 2 };
+    if (R.kind === 'rewind') {           // the fall plays backwards
+      const rec = s.rec || [];
+      if (!rec.length) return;
+      const f = rec[Math.round((1 - k * k) * (rec.length - 1))];
+      s.parts.forEach((p, i) => { p.x = f[i][0]; p.y = f[i][1]; p.rot = f[i][2]; });
+      drawParts();
+      return;
+    }
+    const from = R.from || { x: ex + 40, y: WATER_Y };
+    if (R.kind === 'balloon') {
+      const x = lerp(from.x, home.x, ease(k)), y = lerp(from.y, home.y, ease(k)) - Math.sin(k * Math.PI) * 60;
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, y - 14); ctx.lineTo(x + 6, y - 64); ctx.stroke();
+      ctx.fillStyle = '#ff3355'; ctx.beginPath(); ctx.ellipse(x + 6, y - 88, 20, 25, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(x - 1, y - 96, 5, 0, Math.PI * 2); ctx.fill();
+      body(x, y, Math.sin(k * 12) * 0.15);
+    } else if (R.kind === 'seagull') {
+      let gx, gy, bx, by;
+      if (k < 0.35) { const q = k / 0.35; gx = lerp(W + 400, from.x, q); gy = lerp(GROUND_Y - 300, from.y - 20, q); bx = from.x; by = from.y; }
+      else if (k < 0.8) { const q = ease((k - 0.35) / 0.45); bx = lerp(from.x, home.x, q); by = lerp(from.y, home.y - 120, q); gx = bx; gy = by - 20; }
+      else { const q = (k - 0.8) / 0.2; bx = home.x; by = lerp(home.y - 120, home.y, q * q); gx = home.x - q * 300; gy = home.y - 140 - q * 200; }
+      body(bx, by, k < 0.8 ? 0.2 : 0);
+      const flap = Math.sin(performance.now() / 50) * 10;
+      ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.ellipse(gx, gy - 14, 16, 8, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(gx - 26, gy - 20 - flap); ctx.lineTo(gx, gy - 14); ctx.lineTo(gx + 26, gy - 20 - flap); ctx.stroke();
+      ctx.fillStyle = '#ffb000'; ctx.beginPath(); ctx.moveTo(gx - 16, gy - 15); ctx.lineTo(gx - 24, gy - 12); ctx.lineTo(gx - 16, gy - 10); ctx.fill();
+    } else if (R.kind === 'parachute') {
+      const start = s.rec && s.rec.length ? { x: s.rec[0][0][0], y: s.rec[0][0][1] } : { x: ex + 20, y: GROUND_Y - 20 };
+      const rockY = WATER_Y - Math.min(1, k / 0.3) * 46;
+      ctx.fillStyle = '#5a5f73'; ctx.beginPath(); ctx.ellipse(start.x + 40, rockY + 30, 42, 32, 0, Math.PI, 0); ctx.fill();
+      let x, y;
+      if (k < 0.7) { const q = k / 0.7; x = lerp(start.x, start.x + 40, q); y = lerp(start.y, rockY - 18, q); }
+      else { const q = (k - 0.7) / 0.3; x = lerp(start.x + 40, home.x, q); y = lerp(rockY - 18, home.y, q) - Math.sin(q * Math.PI) * 160; }
+      if (k < 0.7) {
+        ctx.fillStyle = '#7ef9ff'; ctx.beginPath(); ctx.arc(x, y - 70, 38, Math.PI, 0); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(x - 38, y - 70); ctx.lineTo(x - 10, y - 14); ctx.moveTo(x + 38, y - 70); ctx.lineTo(x + 10, y - 14); ctx.moveTo(x, y - 70); ctx.lineTo(x, y - 14); ctx.stroke();
+      }
+      body(x, y, k < 0.7 ? Math.sin(k * 10) * 0.1 : (k - 0.7) * 6);
+    }
+  }
+
   // Story cliffs are named by world: cliff 17 is "CLIFF 2-7".
   function cliffLabel(n) { const w = Math.floor((n - 1) / 10) + 1, k = (n - 1) % 10 + 1; return `CLIFF ${w}-${k}`; }
 
@@ -2177,10 +2382,20 @@
       ctx.fillText(SURFACES[g.si].name, x0 + 5, GROUND_Y + 82);
     }
     if (ASSIST) drawAssist();
+    if (s.helper === 'ball' && !s.parts && (s.state === 'ready' || s.state === 'holding')) {
+      const x = s.idealFront * PPM, glow = 0.6 + 0.4 * Math.sin(performance.now() / 150);
+      ctx.strokeStyle = `rgba(180,140,255,${glow})`; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(x, GROUND_Y - 60); ctx.lineTo(x, GROUND_Y); ctx.stroke();
+      ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#d9c4ff';
+      ctx.fillText('LET GO HERE', x, GROUND_Y - 70);
+    }
+    if (s.helper === 'sandbag') {
+      ctx.fillStyle = '#c7955a';
+      for (let x = edgePx() - 1.6 * PPM + 4; x < edgePx() - 6; x += 12) { ctx.beginPath(); ctx.roundRect(x, GROUND_Y - 6, 10, 7, 3); ctx.fill(); }
+    }
     if (!s.parts) drawCar();
     ctx.restore();
     if (s.spec.fog && s.world !== 2 && !s.parts) drawFog();
-    if (s.parts) drawParts();
+    if (s.parts) { if (s.rescue && s.rescue.state === 'anim') drawRescue(); else drawParts(); }
     if (s.rocks) for (const r of s.rocks) {
       ctx.save(); ctx.translate(r.x, r.y); ctx.rotate(r.rot);
       ctx.fillStyle = s.surface.side; ctx.fillRect(-r.w / 2, -r.h / 2, r.w, r.h);
@@ -2222,7 +2437,10 @@
     }
 
     // Top banner: friend challenge, daily challenge, or the endless run
-    if (s.daily) {
+    const rescuing = s.rescue && s.rescue.state === 'anim';
+    if (rescuing) {
+      // (only the rescue title, drawn below)
+    } else if (s.daily) {
       const d = getDaily(), left = DAILY_TRIES - d.tries, streak = getStreak();
       text('DAILY CHALLENGE', W / 2, 150, 20, '#ffd23f', 800);
       if (s.state === 'ready') {
@@ -2246,6 +2464,9 @@
         text(s.newCp ? 'CHECKPOINT SAVED!' : 'CLIFF CLEARED!', W / 2, 150, 34, '#ffd23f', 900);
         text(s.newCp ? `Hearts refilled · next: ${cliffLabel(cliff)}` : `Next: ${cliffLabel(cliff)}`, W / 2, 196, 22, '#fff3c4', 800);
       }
+    } else if (s.rescue && s.rescue.state === 'offer' && (s.state === 'stopped' || s.state === 'fell' || s.splashed)) {
+      text('LAST HEART LOST!', W / 2, 150, 32, '#ff8fa8', 900);
+      text(`Save it, or tap anywhere: back to ${cliffLabel(checkpoint)}`, W / 2, 196, 19, '#fff3c4', 800);
     } else if (s.missed && (s.state === 'stopped' || s.state === 'fell' || s.splashed)) {
       if (s.backTo) {
         text('NO HEARTS LEFT', W / 2, 150, 34, '#ff8fa8', 900);
@@ -2284,7 +2505,7 @@
       }
     } else if (s.state === 'sliding' || (ASSIST && s.state === 'holding')) {
       text(fmt(Math.max(0, gapNow() * 100)), W / 2, 340, 52, 'rgba(255,255,255,0.9)');
-    } else if (s.state === 'stopped') {
+    } else if (s.state === 'stopped' && !rescuing) {
       text(fmt(s.result), W / 2, 300, 76, '#ffffff');
       if (s.friend) text(s.friendWin ? 'YOU BEAT YOUR FRIEND!' : 'YOUR FRIEND WINS', W / 2, 358, 30, s.friendWin ? '#ffd23f' : '#fff3c4', 900);
       else if (s.daily) {
@@ -2303,11 +2524,22 @@
       }
       else text(s.newBest ? 'NEW BEST STOP!' : 'from the edge', W / 2, 358, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
       text(endHint(s.cleared ? `TAP FOR ${cliffLabel(cliff)}` : `TAP TO RETRY ${cliffLabel(s.replay ? s.cliff : cliff)}`, 'TAP TO PLAY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
+    } else if (rescuing) {
+      // the rescue animation speaks for itself
     } else if (s.state === 'falling' || s.state === 'fell') {
       text(s.fallMsg, W / 2, 340, 64, '#ffffff');
       if (s.friend) text(s.friend.score === null ? 'YOU BOTH FELL!' : 'YOUR FRIEND WINS', W / 2, 400, 28, '#fff3c4', 900);
       text(endHint(`TAP TO RETRY ${cliffLabel(s.replay ? s.cliff : cliff)}`, 'TAP TO TRY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
     }
+    if (rescueBtnVisible()) drawRescueBtn();
+    if (helperVisible()) drawHelpers();
+    if (doubleVisible()) drawPillBtn(DOUBLE_BTN, 'DOUBLE COINS', '#ffd23f', '#12141f', 18);
+    if (heartBtnVisible()) drawPillBtn(HEART_BTN, '+1 ♥', '#ff4f7b', '#ffffff', 18);
+    if (boxVisible()) drawPillBtn(BOX_BTN, 'OPEN MYSTERY BOX', '#7ef9ff', '#12141f', 18);
+    if (s.boxCoins) { drawCoin(W / 2 - 50, 452, 12); text('+' + s.boxCoins + ' FROM THE BOX', W / 2 - 32, 453, 20, '#7ef9ff', 900, 'left'); }
+    if (s.heartWon) text('GOLDEN HEART! +1 ♥', W / 2, 512, 20, '#ffd23f', 900);
+    if (s.rescue && s.rescue.state === 'anim') text({ rewind: 'REWIND!', balloon: 'BALLOON RESCUE!', seagull: 'SEAGULL RESCUE!', parachute: 'PARACHUTE!' }[s.rescue.kind], W / 2, 150, 36, '#7ef9ff', 900);
+    if (inSlowMo()) text('SLOW MOTION', W / 2, 290, 22, '#7ef9ff', 900);
     if (shareVisible()) drawShareBtn();
     if (challengeVisible()) drawChallengeBtn();
     if (performance.now() < toast.until) {

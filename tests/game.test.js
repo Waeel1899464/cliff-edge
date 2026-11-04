@@ -171,14 +171,18 @@ const PLAY = `
         const a = window.__playGap(-999); window.__next();
         const b = window.__playGap(window.__cliff().target + 5); window.__next();
         out.hearts = a.hearts === 2 && b.hearts === 1 && k('hearts') === '1';
-        const c = window.__playGap(-999); window.__next();
-        out.back = c.backTo === 6 && window.__cliff().cliff === 6 && k('hearts') === '3';
+        window.__playGap(-999);
+        const c = window.__cliff();                         // the round itself (the helper returns a summary)
+        // V3: losing the last heart first offers a rescue; nothing is lost until the player chooses
+        out.offer = !!(c.rescue && c.rescue.state === 'offer') && k('hearts') === '1';
+        window.__next();                                    // any other tap = no rescue: back as usual
+        out.back = out.offer && c.backTo === 6 && window.__cliff().cliff === 6 && k('hearts') === '3';
         out.bestCliff = k('bestcliff') === '6';
         return out;
       });
       check('checkpoint at cliff 6 saved (cliff, checkpoint, hearts refilled)', r.cp);
       check('fall and missed target each cost one heart (saved)', r.hearts);
-      check('no hearts left → back to the checkpoint, hearts refilled', r.back && r.bestCliff);
+      check('no hearts left → rescue offered first; a normal tap goes back to the checkpoint, hearts refilled', r.back && r.bestCliff);
       await page.reload(); await page.waitForFunction(() => typeof window.__cliff === 'function');
       const after = await page.evaluate(() => ({ cliff: window.__cliff().cliff, target: window.__cliff().target, exp: window.__physics.cliffTarget(6, window.__physics.cliffParams(6)) }));
       check('after reload: same cliff and same target', after.cliff === 6 && after.target === after.exp);
