@@ -365,11 +365,31 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     }
     // Intended first-try success on story cliff n: the V2 curve; boss cliffs a little harder.
     function storyGoal(n, sp) { return Math.max(0.2, successGoal(n) - (sp.boss ? 0.05 : 0)); }
+    // Chance that the reference player succeeds with target T (cm), aiming at the middle of the zone:
+    // the real gap function is integrated over a normal timing error (exact for any twist, including
+    // ground changes and a crumbling edge, where one straight-line sensitivity is not enough).
+    function successProbS(T, sp, sigma) {
+      const tA = releaseS(T / 200, sp), N = 120, span = 4 * sigma;
+      let sum = 0, wsum = 0;
+      for (let i = 0; i <= N; i++) {
+        const e = -span + 2 * span * i / N, w = Math.exp(-0.5 * (e / sigma) * (e / sigma)) * (i === 0 || i === N ? 0.5 : 1);
+        const g = gapS(Math.max(0, tA + e), sp) * 100;
+        if (g >= 0 && g < T) sum += w;
+        wsum += w;
+      }
+      return sum / wsum;
+    }
+    function roundTarget(T) { const r = T >= 10 ? Math.ceil(T) : Math.ceil(T * 2) / 2; return Math.min(100, Math.max(0.5, r)); }
     function targetS(p, sp) {
-      const sPos = sensitivityS(sp) * timingSigma(refFor(sp));
-      const T = 2 * sPos * normInv((1 + p) / 2) * 100;
-      const r = T >= 10 ? Math.ceil(T) : Math.ceil(T * 2) / 2;
-      return Math.min(100, Math.max(0.5, r));
+      const sigma = timingSigma(refFor(sp));
+      if (!sp.patches.length && !sp.crumble.length) {
+        // smooth cliffs: V2's method (the gap changes at one steady rate near the edge)
+        return roundTarget(2 * sensitivityS(sp) * sigma * normInv((1 + p) / 2) * 100);
+      }
+      let lo = 0.5, hi = 100;
+      if (successProbS(hi, sp, sigma) < p) return 100;
+      for (let i = 0; i < 22; i++) { const m = (lo + hi) / 2; if (successProbS(m, sp, sigma) < p) lo = m; else hi = m; }
+      return roundTarget(hi);
     }
 
     // ---- the worlds: 5 worlds x 10 hand-made cliffs (same for every player) ----
@@ -395,6 +415,18 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       spec({ si: 0, dist: 13, vmax: 8.5, wind: 1.0 }),              // 18 strong tail wind on road
       spec({ si: 3, dist: 13, vmax: 9,   wind: -1.0 }),             // 19 strong head wind, fast sand
       spec({ si: 3, dist: 14, vmax: 8.5, wind: 1.2, fog: 0.3, boss: true }),   // 20 BOSS sandstorm: strongest tail wind, blowing sand
+      // World 3: Snow Mountain — the ground changes on the way (painted on the road and named on the
+      // cliff face) and fog (the edge shows only when you get close; the distance counter stays).
+      spec({ si: 0, dist: 11, vmax: 7, patches: [{ at: 9, si: 1 }] }),                         // 21 checkpoint: last 2 m are ice
+      spec({ si: 0, dist: 12, vmax: 7.5, patches: [{ at: 8, si: 1 }, { at: 10.5, si: 0 }] }),  // 22 an ice strip in the middle
+      spec({ si: 0, dist: 11, vmax: 7, fog: 0.6 }),                                            // 23 first fog, plain road
+      spec({ si: 1, dist: 12, vmax: 6.5, patches: [{ at: 10, si: 2 }] }),                      // 24 ice, a mud strip before the edge
+      spec({ si: 0, dist: 12, vmax: 7.5, patches: [{ at: 9.5, si: 1 }] }),                     // 25 road, ice from 9.5 m
+      spec({ si: 1, dist: 12, vmax: 6, fog: 0.4, patches: [{ at: 10, si: 0 }] }),              // 26 checkpoint: ice to road, light fog
+      spec({ si: 0, dist: 13, vmax: 8, patches: [{ at: 7, si: 1 }, { at: 10, si: 2 }] }),      // 27 road, ice, then mud
+      spec({ si: 1, dist: 13, vmax: 7, fog: 0.8 }),                                            // 28 ice in thick fog
+      spec({ si: 0, dist: 13, vmax: 7.5, fog: 0.5, patches: [{ at: 10.5, si: 1 }] }),          // 29 road to ice, in fog
+      spec({ si: 0, dist: 14, vmax: 8.5, fog: 1.0, patches: [{ at: 10.5, si: 1 }, { at: 12.5, si: 0 }], boss: true }),   // 30 BOSS: night, thick fog, an ice strip
     ];
     function worldOf(n) { return Math.min(WORLDS.length, Math.floor((n - 1) / 10) + 1); }
     // Spec for story cliff n. Worlds not built yet fall back to the seeded V2 cliffs.
@@ -408,7 +440,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
              sensitivity, REF, timingSigma, normInv, CURVE, successGoal, targetFor, GRADE, grade,
              seededParams, CURATED, cliffParams, cliffTarget,
              G, spec, holdAccel, groundCK, segments, holdS, holdTimeForS, slidePlan, planAt, planTimeFor, edgeAt,
-             gapS, releaseS, sensitivityS, refFor, storyGoal, targetS, WORLDS, CLIFFS, worldOf, cliffSpec, storyTarget };
+             gapS, releaseS, sensitivityS, refFor, storyGoal, targetS, successProbS, WORLDS, CLIFFS, worldOf, cliffSpec, storyTarget };
   })();
   /* PHYSICS-END */
 
@@ -592,6 +624,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     return { send };
   })();
 
+  // Story targets are the same every time for a given cliff: compute once (a few ms), then reuse.
+  const targetCache = {};
+  function storyTargetCached(n, sp) {
+    const key = n + ':' + JSON.stringify(sp);
+    return key in targetCache ? targetCache[key] : (targetCache[key] = Physics.storyTarget(n, sp));
+  }
   function newRound() {
     // Rounded to the millimetre so a challenge link reproduces the round exactly.
     let si = Math.floor(Math.random() * 3);   // the three V2 grounds
@@ -618,7 +656,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       params: { si, dist, vmax },
       friend: fr, friendTry: fr ? fr.tries : 0, friendWin: false,
       daily, dailyDay: daily ? dayKey() : null, dailyTry: 0, newDailyBest: false, layoutKey, releaseFront: null,
-      cliff, target: Physics.storyTarget(cliff, sp), grade: null, spec: sp, plan: null, surfNow: surface,
+      cliff, target: storyTargetCached(cliff, sp), grade: null, spec: sp, plan: null, surfNow: surface,
       world: Physics.worldOf(cliff), worldDone: false, cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
       vmax,
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
@@ -1770,7 +1808,13 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       far: '#3a1716', near: '#24100f', page: ['#1c0a10', '#5e1a1a', '#b9421e', '#ff6018', '#e04f12'] },
   ];
   // Story mode uses the world's look; the daily and friend cliffs keep the original sunset.
-  function zoneOf(st) { return st.daily || st.friend ? ZONES[0] : WORLD_LOOKS[(st.world || 1) - 1]; }
+  const SNOW_NIGHT = { name: 'SNOW NIGHT', sky: ['#05081a', '#141c3c', '#2c3866'], sea: 'rgba(16,28,64,0.95)', foam: 'rgba(255,255,255,0.3)', bg: 'peaks', stars: true,
+    far: '#2c3a5c', near: '#1f2a46', page: ['#05081a', '#141c3c', '#2c3866', '#101c40', '#0c1634'] };
+  function zoneOf(st) {
+    if (st.daily || st.friend) return ZONES[0];
+    if (st.world === 3 && st.spec && st.spec.boss) return SNOW_NIGHT;      // the snow boss is at night
+    return WORLD_LOOKS[(st.world || 1) - 1];
+  }
   // Far backdrop behind the cliff and the sea (screen space, does not move with the camera).
   function drawBackdrop(Z) {
     const base = WATER_Y;
@@ -1825,6 +1869,17 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - dir * len, y); ctx.stroke();
     }
     ctx.restore();
+  }
+  // Fog: you see only a few metres ahead of the car (thicker fog = shorter view). The distance
+  // counter still shows the exact gap, and the target is sized for the fog (Physics.refFor).
+  function drawFog() {
+    const view = (8 - 4 * s.spec.fog) * PPM, fade = 1.6 * PPM, x = frontX() * PPM + view;
+    const night = s.spec.boss && s.world === 3;
+    const c = night ? '24,30,58' : '226,234,246';
+    const g = ctx.createLinearGradient(x - fade, 0, x, 0);
+    g.addColorStop(0, `rgba(${c},0)`); g.addColorStop(1, `rgba(${c},0.96)`);
+    ctx.fillStyle = g; ctx.fillRect(x - fade, -2000, fade, 5000);
+    ctx.fillStyle = `rgba(${c},0.96)`; ctx.fillRect(x, -2000, 4000, 5000);
   }
   // Blowing sand over the world on the sandstorm cliff (light, the edge stays readable)
   function drawStormHaze() { ctx.fillStyle = 'rgba(236,190,120,0.2)'; ctx.fillRect(0, 0, W, H); }
@@ -1901,9 +1956,18 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
     if (s.state === 'ready' || s.state === 'holding') ctx.fillText(s.surface.name, EDGE_X - 16, GROUND_Y + (ASSIST ? 62 : 40));
 
+    // name each ground change on the cliff face, under where it starts
+    for (const g of Physics.segments(s.spec).slice(1)) {
+      const x0 = EDGE_X - (s.dist - g.x0) * PPM;
+      ctx.fillStyle = SURFACES[g.si].top; ctx.fillRect(x0, GROUND_Y + 14, 2, 74);
+      ctx.font = '900 13px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillText(SURFACES[g.si].name, x0 + 5, GROUND_Y + 82);
+    }
     if (ASSIST) drawAssist();
     if (!s.parts) drawCar();
     ctx.restore();
+    if (s.spec.fog && s.world !== 2 && !s.parts) drawFog();
     if (s.parts) drawParts();
 
     // sea drawn over the pieces so sinking parts look underwater
