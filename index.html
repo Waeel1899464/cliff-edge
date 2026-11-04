@@ -423,6 +423,20 @@
       spec({ si: 2, dist: 18, vmax: 8,   gs: 0.4, slope: 0.06 }),                              // 38 steeper crater slope
       spec({ si: 0, dist: 22, vmax: 8,   gs: 0.4, patches: [{ at: 19.5, si: 1 }] }),           // 39 icy crater rim
       spec({ si: 3, dist: 24, vmax: 8.5, gs: 0.4, slope: 0.06, patches: [{ at: 20, si: 0 }], boss: true }),   // 40 BOSS: the big crater run
+      // World 5: Volcano — the edge crumbles: when the car front passes a red line on the road, the
+      // cracked piece at the edge breaks off (the edge moves closer). Cracks and lines are drawn, the
+      // positions are fixed. Earthquakes shake the screen (the target is sized for it).
+      spec({ si: 0, dist: 11, vmax: 7,   crumble: [{ at: 9, len: 0.4 }] }),                                  // 41 checkpoint: one piece
+      spec({ si: 0, dist: 12, vmax: 7.5, crumble: [{ at: 9.5, len: 0.5 }] }),                                // 42 a bigger piece
+      spec({ si: 2, dist: 12, vmax: 8,   crumble: [{ at: 9.5, len: 0.4 }, { at: 10.5, len: 0.4 }] }),        // 43 two pieces on mud
+      spec({ si: 0, dist: 12, vmax: 7.5, quake: 0.5 }),                                                      // 44 first earthquake
+      spec({ si: 3, dist: 13, vmax: 8,   wind: 0.6, crumble: [{ at: 10, len: 0.4 }, { at: 11, len: 0.4 }] }),   // 45 hot wind, two pieces
+      spec({ si: 0, dist: 12, vmax: 7,   crumble: [{ at: 10, len: 0.5 }] }),                                 // 46 checkpoint
+      spec({ si: 1, dist: 13, vmax: 7,   crumble: [{ at: 10, len: 0.5 }] }),                                 // 47 ice and a crumbling edge
+      spec({ si: 0, dist: 14, vmax: 8.5, slope: 0.06, crumble: [{ at: 11, len: 0.4 }, { at: 12, len: 0.4 }] }),   // 48 downhill to a crumbling edge
+      spec({ si: 2, dist: 13, vmax: 8.5, quake: 0.6, fog: 0.3, crumble: [{ at: 10.5, len: 0.5 }] }),        // 49 earthquake in the smoke
+      spec({ si: 0, dist: 15, vmax: 8.5, wind: -0.6, slope: 0.05, fog: 0.4, quake: 0.8,                      // 50 FINAL BOSS: everything at once
+             patches: [{ at: 10.5, si: 1 }, { at: 12.5, si: 0 }], crumble: [{ at: 12.6, len: 0.4 }, { at: 13.6, len: 0.4 }], boss: true }),
     ];
     function worldOf(n) { return Math.min(WORLDS.length, Math.floor((n - 1) / 10) + 1); }
     // Spec for story cliff n. Worlds not built yet fall back to the seeded V2 cliffs.
@@ -757,6 +771,14 @@
   // metres travelled by the car front, and the gap to the edge right now (the edge can move)
   function travel() { return frontX() - (s.x0 + CAR_LEN); }
   function gapNow() { return Physics.edgeAt(s.spec, travel()) - travel(); }
+  // the edge right now, in screen-world pixels (it moves back when a piece breaks off)
+  function edgePx() { return EDGE_X - (s.dist - Physics.edgeAt(s.spec, travel())) * PPM; }
+  function fallenPieces() {   // same rule as Physics.edgeAt: a piece breaks if the car reaches its line first
+    let E = s.dist, n = 0;
+    const reach = travel();
+    for (const c of s.spec.crumble.slice().sort((a, b) => a.at - b.at)) if (c.at <= Math.min(reach, E)) { E -= c.len; n++; }
+    return n;
+  }
   function surfaceAt(d) {
     const g = Physics.segments(s.spec).find(x => d < x.x1);
     return SURFACES[g ? g.si : s.spec.si];
@@ -1316,7 +1338,7 @@
     const bodyY = GROUND_Y - WHEEL_R - CAR_H / 2 - 2;
     const vx = Math.max(s.v, 1.4) * PPM;
     s.parts = [
-      cx < EDGE_X + 12
+      cx < edgePx() + 12
         // Slow: the body tips forward over the edge before it drops.
         ? { kind: 'body', x: cx, y: bodyY, vx, vy: 0, rot: s.tilt, vrot: 1.5, r: 12, tipping: true }
         : { kind: 'body', x: cx, y: bodyY, vx, vy: -60, rot: s.tilt, vrot: 3 + s.v * 0.5, r: 12 },
@@ -1324,7 +1346,7 @@
       { kind: 'wheel', x: cx + len / 2 - 11, y: GROUND_Y - WHEEL_R, vx: vx + rand(20, 140), vy: -rand(220, 380), rot: 0, vrot: rand(-14, 14), r: WHEEL_R },
     ];
     s.fallMsg = s.v < 1.5 ? 'SO CLOSE!' : ['NOOOO!', 'BYE BYE!', 'OOPS!', 'SPLASH!'][Math.floor(Math.random() * 4)];
-    puff(EDGE_X, GROUND_Y, 10, s.surface.dust, 90, 160, 4, 0.6);
+    puff(edgePx(), GROUND_Y, 10, s.surface.dust, 90, 160, 4, 0.6);
     Sound.scream();
     Sound.pop();
   }
@@ -1336,12 +1358,13 @@
   }
   function updateFall(dt) {
     s.fallT += dt;
+    const ex = edgePx();
     for (const p of s.parts) {
       if (p.tipping) {
         p.vx += 250 * dt; p.vrot += 10 * dt;
         p.x += p.vx * dt; p.rot += p.vrot * dt;
         p.y += p.vx * dt * Math.sin(Math.max(0, p.rot)) * 0.6;
-        if (p.x > EDGE_X + p.r) { p.tipping = false; p.vy = p.vx * Math.sin(Math.max(0, p.rot)); }
+        if (p.x > ex + p.r) { p.tipping = false; p.vy = p.vx * Math.sin(Math.max(0, p.rot)); }
         continue;
       }
       if (p.inWater) {
@@ -1355,13 +1378,13 @@
       p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vrot * dt;
 
       // Bounce off the cliff top (wheels that hop backwards)
-      if (!p.inWater && p.kind === 'wheel' && p.x < EDGE_X && prevY + p.r <= GROUND_Y && p.y + p.r > GROUND_Y) {
+      if (!p.inWater && p.kind === 'wheel' && p.x < ex && prevY + p.r <= GROUND_Y && p.y + p.r > GROUND_Y) {
         p.y = GROUND_Y - p.r; p.vy = -Math.abs(p.vy) * 0.45; p.vx *= 0.7;
       }
       // Bounce off the cliff wall
-      if (!p.inWater && p.y + p.r > GROUND_Y && p.x - p.r < EDGE_X && prevY + p.r > GROUND_Y) {
-        p.x = EDGE_X + p.r; p.vx = Math.abs(p.vx) * 0.5 + 30; p.vrot *= -0.7;
-        puff(EDGE_X, p.y, 5, s.surface.dust, 60, 80, 3, 0.5);
+      if (!p.inWater && p.y + p.r > GROUND_Y && p.x - p.r < ex && prevY + p.r > GROUND_Y) {
+        p.x = ex + p.r; p.vx = Math.abs(p.vx) * 0.5 + 30; p.vrot *= -0.7;
+        puff(ex, p.y, 5, s.surface.dust, 60, 80, 3, 0.5);
       }
       // Hit the sea
       if (!p.inWater && p.y > WATER_Y) {
@@ -1392,6 +1415,18 @@
       // just never steps backwards while it catches up with the exact slide.
       s.x = s.state === 'sliding' ? Math.max(s.x, s.x0 + m.d) : s.x0 + m.d; s.v = m.v; s.a = m.a;
       s.surfNow = surfaceAt(travel());
+      if (s.spec.crumble.length) {
+        const n = fallenPieces();
+        while ((s.fallen || 0) < n) {
+          const E0 = Physics.edgeAt(s.spec, s.spec.crumble.slice().sort((a, b) => a.at - b.at)[s.fallen || 0].at - 1e-9);
+          const len = s.spec.crumble.slice().sort((a, b) => a.at - b.at)[s.fallen || 0].len;
+          const x1 = EDGE_X - (s.dist - E0) * PPM, w = len * PPM;
+          (s.rocks = s.rocks || []).push({ x: x1 - w / 2, y: GROUND_Y + 30, w, h: 60, vx: 25, vy: -30, rot: 0, vr: 1.2 });
+          puff(x1 - w / 2, GROUND_Y, 14, s.surface.dust, 80, 140, 4, 0.7);
+          shake = Math.max(shake, 6); Sound.pop();
+          s.fallen = (s.fallen || 0) + 1;
+        }
+      }
       if (s.state === 'sliding' && s.v > 0.4 && Math.random() < 0.9) spawnDust(Math.random() < s.v / 6 ? 2 : 1);
       if (over) {
         startFall();
@@ -1451,6 +1486,10 @@
     const sqT = moving ? Math.max(-0.12, Math.min(0.12, s.a * 0.012)) : 0;
     s.sqV += ((sqT - s.sq) * 160 - s.sqV * 8) * dt; s.sq += s.sqV * dt;
 
+    // Pieces of the edge falling into the lava
+    if (s.rocks) for (const r of s.rocks) { r.vy += G_PX * dt; r.x += r.vx * dt; r.y += r.vy * dt; r.rot += r.vr * dt; }
+    // quake: the screen keeps shaking while you drive
+    if (s.spec.quake && (s.state === 'holding' || s.state === 'sliding') && !s.daily && !s.friend) shake = Math.max(shake, 3 * s.spec.quake);
     // Particles
     for (const p of particles) {
       p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt;
@@ -1720,8 +1759,9 @@
     ctx.save();
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     // meter marks
+    const ex = edgePx();
     for (let m = 1; m <= 5; m++) {
-      const x = EDGE_X - m * PPM;
+      const x = ex - m * PPM;
       ctx.fillStyle = 'rgba(255,255,255,0.75)';
       ctx.fillRect(x - 1, top, 2, 12);
       ctx.font = '800 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
@@ -1730,7 +1770,7 @@
     }
     // fine marks near the edge (readable when the camera zooms in)
     [[0.5, '50'], [0.2, '20'], [0.1, '10']].forEach(([m, label]) => {
-      const x = EDGE_X - m * PPM;
+      const x = ex - m * PPM;
       ctx.fillStyle = 'rgba(255,255,255,0.6)';
       ctx.fillRect(x - 0.5, top, 1, 6);
       if (cam.z > 1.6) {
@@ -1835,10 +1875,10 @@
       });
       ridge(25, 0.02, 3, 780, Z.near);
     } else if (Z.bg === 'volcano') {
-      ctx.fillStyle = Z.far; ctx.beginPath(); ctx.moveTo(220, base); ctx.lineTo(360, 600); ctx.lineTo(420, 600); ctx.lineTo(560, base); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = 'rgba(255,140,40,0.85)'; ctx.fillRect(362, 596, 56, 6);
+      ctx.fillStyle = Z.far; ctx.beginPath(); ctx.moveTo(200, base); ctx.lineTo(360, 500); ctx.lineTo(420, 500); ctx.lineTo(580, base); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(255,140,40,0.85)'; ctx.fillRect(362, 496, 56, 6);
       ctx.fillStyle = 'rgba(60,30,30,0.5)';
-      for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(390 + i * 18, 560 - i * 34, 16 + i * 7, 0, Math.PI * 2); ctx.fill(); }
+      for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(390 + i * 18, 460 - i * 34, 16 + i * 7, 0, Math.PI * 2); ctx.fill(); }
       ridge(28, 0.017, 2, 775, Z.near);
     } else if (Z.bg === 'moon') {
       // the Earth, low in the sky on the right, clear of the text at the top
@@ -1878,7 +1918,7 @@
   function drawFog() {
     const view = (8 - 4 * s.spec.fog) * PPM, fade = 1.6 * PPM, x = frontX() * PPM + view;
     const night = s.spec.boss && s.world === 3;
-    const c = night ? '24,30,58' : '226,234,246';
+    const c = night ? '24,30,58' : s.world === 5 ? '74,44,40' : '226,234,246';
     const g = ctx.createLinearGradient(x - fade, 0, x, 0);
     g.addColorStop(0, `rgba(${c},0)`); g.addColorStop(1, `rgba(${c},0.96)`);
     ctx.fillStyle = g; ctx.fillRect(x - fade, -2000, fade, 5000);
@@ -1886,6 +1926,27 @@
   }
   // Blowing sand over the world on the sandstorm cliff (light, the edge stays readable)
   function drawStormHaze() { ctx.fillStyle = 'rgba(236,190,120,0.2)'; ctx.fillRect(0, 0, W, H); }
+
+  // Crumbling edge, readable before you drive: each piece that will break has a glowing crack at
+  // its inner side, and a red line on the road shows where your car makes it break.
+  function drawCracks(ePx) {
+    const list = s.spec.crumble.slice().sort((a, b) => a.at - b.at);
+    let E = s.dist;
+    const done = s.fallen || 0;
+    list.forEach((c, i) => {
+      const inner = E - c.len;
+      if (i >= done) {
+        const x = EDGE_X - (s.dist - inner) * PPM;
+        ctx.strokeStyle = '#ff7a1a'; ctx.lineWidth = 2.5; ctx.lineJoin = 'round';
+        ctx.beginPath(); ctx.moveTo(x, GROUND_Y - 1); ctx.lineTo(x + 3, GROUND_Y + 12); ctx.lineTo(x - 2, GROUND_Y + 26);
+        ctx.lineTo(x + 2, GROUND_Y + 44); ctx.lineTo(x - 1, GROUND_Y + 70); ctx.stroke();
+        const tx = EDGE_X - (s.dist - c.at) * PPM;     // the trigger line on the road
+        ctx.fillStyle = '#ff3355';
+        for (let k = 0; k < 3; k++) ctx.fillRect(tx - 1.5, GROUND_Y - 2 + k * 6, 3, 4);
+      }
+      E = inner;
+    });
+  }
 
   // Story cliffs are named by world: cliff 17 is "CLIFF 2-7".
   function cliffLabel(n) { const w = Math.floor((n - 1) / 10) + 1, k = (n - 1) % 10 + 1; return `CLIFF ${w}-${k}`; }
@@ -1926,8 +1987,9 @@
     ctx.scale(cam.z, cam.z);
     ctx.translate(-cam.fx, -cam.fy);
 
+    const ePx = edgePx();
     ctx.fillStyle = s.surface.side;
-    ctx.fillRect(-2000, GROUND_Y + 14, EDGE_X + 2000, 3000);
+    ctx.fillRect(-2000, GROUND_Y + 14, ePx + 2000, 3000);
     // A downhill road is drawn at its real angle, pivoting at the edge (physics uses the same slope).
     const ang = Math.atan(s.spec.slope || 0);
     if (ang) {
@@ -1938,12 +2000,15 @@
     ctx.translate(EDGE_X, GROUND_Y); ctx.rotate(ang); ctx.translate(-EDGE_X, GROUND_Y * -1);
     // the road top, one colour per piece of ground (ground can change along the road)
     for (const g of Physics.segments(s.spec)) {
-      const x0 = g.x0 === 0 ? -2000 : EDGE_X - (s.dist - g.x0) * PPM, x1 = Math.min(EDGE_X, EDGE_X - (s.dist - g.x1) * PPM);
+      const x0 = g.x0 === 0 ? -2000 : EDGE_X - (s.dist - g.x0) * PPM, x1 = Math.min(ePx, EDGE_X - (s.dist - g.x1) * PPM);
+      if (x1 <= x0) continue;
       ctx.fillStyle = SURFACES[g.si].top;
       ctx.fillRect(x0, GROUND_Y, x1 - x0, 14);
     }
 
-    // edge flag (points out over the drop)
+    if (s.spec.crumble.length) drawCracks(ePx);
+    // edge flag (points out over the drop), always on the current edge
+    ctx.save(); ctx.translate(ePx - EDGE_X, 0);
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(EDGE_X - 3, GROUND_Y - 30, 3, 30);
     ctx.fillStyle = '#ff3355';
@@ -1954,6 +2019,7 @@
     ctx.lineTo(EDGE_X - 3 + 22 * fd, GROUND_Y - 24);
     ctx.lineTo(EDGE_X - 3, GROUND_Y - 18);
     ctx.fill();
+    ctx.restore();
 
     // Ground type, written on the cliff face instead of the top of the screen.
     ctx.font = '800 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
@@ -1974,6 +2040,12 @@
     ctx.restore();
     if (s.spec.fog && s.world !== 2 && !s.parts) drawFog();
     if (s.parts) drawParts();
+    if (s.rocks) for (const r of s.rocks) {
+      ctx.save(); ctx.translate(r.x, r.y); ctx.rotate(r.rot);
+      ctx.fillStyle = s.surface.side; ctx.fillRect(-r.w / 2, -r.h / 2, r.w, r.h);
+      ctx.fillStyle = s.surface.top; ctx.fillRect(-r.w / 2, -r.h / 2, r.w, 8);
+      ctx.restore();
+    }
 
     // sea drawn over the pieces so sinking parts look underwater
     ctx.fillStyle = Z.sea;
@@ -2042,9 +2114,18 @@
       else text(cliffLabel(s.cliff), W / 2, 150, 20, '#ffd23f', 800);
       text('UNDER ' + fmtTarget(s.target), W / 2, 194, 44, '#ffffff', 900);
       drawHearts(W / 2, 242, hearts, false);
+      const tl = [];
       if (s.spec.wind) {
         const w = s.spec.wind, k = Math.abs(w) <= 0.6 ? 1 : Math.abs(w) <= 1.0 ? 2 : 3;
-        text(w > 0 ? 'TAIL WIND ' + '›'.repeat(k) : '‹'.repeat(k) + ' HEAD WIND', W / 2, 280, 20, '#ffffff', 900);
+        tl.push(w > 0 ? 'TAIL WIND ' + '›'.repeat(k) : '‹'.repeat(k) + ' HEAD WIND');
+      }
+      if (s.spec.gs < 1) tl.push('LOW GRAVITY');
+      if (s.spec.crumble.length) tl.push('CRUMBLING EDGE');
+      if (s.spec.quake) tl.push('EARTHQUAKE');
+      // shown before you drive (while driving, the distance counter takes this place)
+      if (s.state === 'ready') {
+        const lines = tl.length > 2 ? [tl.slice(0, 2).join(' · '), tl.slice(2).join(' · ')] : tl;
+        lines.forEach((l, i) => text(l, W / 2, 280 + i * 26, 20, '#ffffff', 900));
       }
     }
 

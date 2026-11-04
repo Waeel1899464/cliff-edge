@@ -58,3 +58,18 @@
 | 4-9 | ROAD | ice @19.5m, gravity 0.4 | 22 | 8 | 31% | 59 | 58% / 82% | 31% / 50% | 19% / 30% |
 | 4-10 | SAND | BOSS: slope 0.06, road @20m, gravity 0.4 | 24 | 8.5 | 25% | 36 | 49% / 74% | 26% / 43% | 15% / 27% |
 
+## World 5: VOLCANO — success on first try / on a retry (4000 tries each)
+
+| Cliff | Ground | Twist | Dist m | Speed | Goal | Target cm | Skilled | Average | Beginner |
+|---|---|---|---|---|---|---|---|---|---|
+| 5-1 | ROAD | 1 crumbling pieces | 11 | 7 | 42% | 32 | 70% / 92% | 39% / 64% | 24% / 40% |
+| 5-2 | ROAD | 1 crumbling pieces | 12 | 7.5 | 29% | 26 | 58% / 82% | 31% / 51% | 18% / 31% |
+| 5-3 | MUD | 2 crumbling pieces | 12 | 8 | 29% | 23 | 49% / 74% | 26% / 42% | 15% / 25% |
+| 5-4 | ROAD | quake | 12 | 7.5 | 28% | 24 | 52% / 74% | 28% / 43% | 17% / 26% |
+| 5-5 | SAND | tail wind 0.6, 2 crumbling pieces | 13 | 8 | 28% | 23 | 50% / 74% | 25% / 44% | 15% / 27% |
+| 5-6 | ROAD | 1 crumbling pieces | 12 | 7 | 39% | 32 | 72% / 92% | 40% / 64% | 23% / 40% |
+| 5-7 | ICE | 1 crumbling pieces | 13 | 7 | 27% | 33 | 48% / 69% | 28% / 43% | 15% / 26% |
+| 5-8 | ROAD | slope 0.06, 2 crumbling pieces | 14 | 8.5 | 26% | 25 | 51% / 75% | 26% / 45% | 15% / 26% |
+| 5-9 | MUD | 1 crumbling pieces, fog, quake | 13 | 8.5 | 26% | 32 | 49% / 74% | 26% / 42% | 15% / 27% |
+| 5-10 | ROAD | BOSS: slope 0.05, head wind 0.6, ice @10.5m, road @12.5m, 2 crumbling pieces, fog, quake | 15 | 8.5 | 20% | 28 | 41% / 64% | 22% / 36% | 13% / 21% |
+
