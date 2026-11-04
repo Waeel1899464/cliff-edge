@@ -1,0 +1,2001 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#12141f">
+<title>Cliff Edge</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+[hidden]{display:none!important}
+</style>
+<script>window.CLIFF_BUILD = 'crazygames'; window.CLIFF_STORE_PREFIX = 'cg3_';</script>
+</head>
+<body>
+<title>Cliff Edge</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: one 9:16 game canvas, centered and letterboxed on any screen. Single dark arcade look by choice. */
+  :root {
+    --bg: #12141f;
+    --fg: #f4f1ff;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body {
+    /* Side areas on wide screens continue the game's world: sky down to the horizon, then sea
+       (the sea starts at 84.4% of the game's height, the same line as in the game), slightly
+       darkened so the game itself stays the focus. Falls back to the plain dark color. */
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(rgba(10, 10, 25, 0.38), rgba(10, 10, 25, 0.38)),
+      linear-gradient(180deg, #2a1f5c 0%, #ff7a59 60%, #ffb36b 84.2%, #1f3d7a 84.4%, #1a3468 100%);
+    color: var(--fg);
+    overflow: hidden;
+    padding-left: max(0px, env(safe-area-inset-left, 0px));
+    padding-right: max(0px, env(safe-area-inset-right, 0px));
+    display: flex; align-items: center; justify-content: center;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    overscroll-behavior: none;
+  }
+  canvas {
+    display: block;
+    box-shadow: 0 0 48px rgba(0, 0, 0, 0.45);
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+  /* Share panel shown when the browser has no share menu (in-app browsers). */
+  .sheet {
+    position: fixed; inset: 0; z-index: 20;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(8, 9, 20, 0.72);
+    padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .sheet-card {
+    width: 100%; max-width: 360px;
+    background: #1d2033; color: #f4f1ff;
+    border-radius: 22px; padding: 22px 20px 16px;
+    display: flex; flex-direction: column; gap: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  }
+  .sheet-card h2 { margin: 0; font-size: 22px; font-weight: 900; text-wrap: balance; }
+  .sheet-card p { margin: 0 0 4px; font-size: 15px; line-height: 1.45; color: #cfd0e6; }
+  .sheet-actions { display: flex; flex-direction: column; gap: 10px; }
+  .sheet-btn {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 52px; padding: 0 16px; border-radius: 26px; border: 0;
+    font: 800 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    text-decoration: none; cursor: pointer;
+    background: #2c3050; color: #ffffff;
+  }
+  .sheet-btn.primary { background: #ffd23f; color: #12141f; }
+  .sheet-btn.ghost { background: transparent; color: #a9abc8; min-height: 44px; }
+  .sheet-btn:focus-visible { outline: 3px solid #7ef9ff; outline-offset: 2px; }
+</style>
+
+<div id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+  <div class="sheet-card">
+    <h2 id="sheet-title"></h2>
+    <p id="sheet-text"></p>
+    <div id="sheet-actions" class="sheet-actions"></div>
+    <button id="sheet-close" class="sheet-btn ghost" type="button">Close</button>
+  </div>
+</div>
+
+<canvas id="game" aria-label="Cliff Edge game. Press and hold to drive, release to stop as close to the edge as you can."></canvas>
+
+<script>
+(() => {
+  // ---------- Build ----------
+  // 'web' = the public GitHub Pages version (all features).
+  // 'crazygames' = platform version, set by build.sh: no external links, no clip sharing,
+  // no friend-challenge links, no event tracking. Original features stay in the code.
+  const BUILD = window.CLIFF_BUILD === 'crazygames' ? 'crazygames' : 'web';
+  const IS_PORTAL = BUILD !== 'web';
+
+  // ---------- Setup ----------
+  const W = 540, H = 960;            // logical size (9:16)
+  const PPM = 30;                    // pixels per meter (at zoom 1)
+  const EDGE_X = 430;                // cliff edge, in logical pixels
+  const GROUND_Y = 620;              // top of the cliff
+  const WATER_Y = H - 150;           // sea surface
+  const CAR_LEN = 1.6;               // meters
+  const CAR_H = 26, WHEEL_R = 8;     // pixels
+  const G_PX = 900;                  // gravity in px/s² for the fall
+  const CAM_ANCHOR_X = W * 0.55;     // where the camera focus sits on screen
+
+  /* PHYSICS-BEGIN
+     Pure functions: no DOM, no game state. tools/sim reads this exact block from index.html,
+     so the simulator and the game always share the same physics.
+
+     Motion is computed with closed-form equations, not frame steps, so a position or a stop
+     depends only on input times, never on the screen's frame rate (30/60/120/144 Hz all equal).
+       Holding (from rest, accel a up to vmax):  v = min(vmax, a*t)
+       Sliding (dv/dt = -(c + k*v)):             v(t) = (v0 + c/k) e^(-k t) - c/k
+                                                 x(t) = (v0 + c/k)(1 - e^(-k t))/k - (c/k) t
+                                                 stop time  = ln(1 + k v0 / c) / k
+                                                 stop dist  = v0/k - (c/k^2) ln(1 + k v0 / c)  */
+  const Physics = (() => {
+    const ACCEL = 7;                                  // m/s² while holding (unchanged)
+    // Braking: deceleration = base + drag * speed (unchanged values)
+    const SURFACES = [
+      { name: 'ROAD', base: 2.0, drag: 0.9 },
+      { name: 'ICE',  base: 0.9, drag: 0.45 },
+      { name: 'MUD',  base: 4.0, drag: 1.8 },
+    ];
+
+    // ---- holding from rest ----
+    function hold(tau, vmax) {
+      if (!(tau > 0)) return { d: 0, v: 0, a: ACCEL };
+      const tv = vmax / ACCEL;
+      if (tau < tv) return { d: 0.5 * ACCEL * tau * tau, v: ACCEL * tau, a: ACCEL };
+      return { d: 0.5 * vmax * tv + vmax * (tau - tv), v: vmax, a: 0 };
+    }
+    // time (s) at which the holding car has moved `dist` meters
+    function holdTimeFor(dist, vmax) {
+      if (!(dist > 0)) return 0;
+      const tv = vmax / ACCEL, dv = 0.5 * vmax * tv;
+      return dist <= dv ? Math.sqrt(2 * dist / ACCEL) : tv + (dist - dv) / vmax;
+    }
+
+    // ---- sliding ----
+    function stopTime(v0, c, k) { return v0 > 0 ? Math.log(1 + k * v0 / c) / k : 0; }
+    function stopDist(v0, c, k) { return v0 > 0 ? v0 / k - (c / (k * k)) * Math.log(1 + k * v0 / c) : 0; }
+    function slide(sig, v0, c, k) {
+      const ts = stopTime(v0, c, k);
+      if (!(sig > 0)) return { d: 0, v: v0, a: v0 > 0 ? -(c + k * v0) : 0, done: !(v0 > 0) };
+      if (sig >= ts) return { d: stopDist(v0, c, k), v: 0, a: 0, done: true };
+      const A = v0 + c / k, e = Math.exp(-k * sig), v = A * e - c / k;
+      return { d: A * (1 - e) / k - (c / k) * sig, v, a: -(c + k * v), done: false };
+    }
+    // time (s) after release at which the sliding car has moved `dist` (< stop distance); bisection
+    function slideTimeFor(dist, v0, c, k) {
+      let lo = 0, hi = stopTime(v0, c, k);
+      for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (slide(m, v0, c, k).d < dist) lo = m; else hi = m; }
+      return (lo + hi) / 2;
+    }
+
+    // ---- whole attempt ----
+    // gap to the edge (m) after releasing at hold time tau, front starting D meters from the edge
+    function gapAfter(tau, D, vmax, c, k) { const h = hold(tau, vmax); return D - h.d - stopDist(h.v, c, k); }
+    // hold time that leaves `gap` meters (gap(tau) only decreases with tau)
+    function releaseFor(gap, D, vmax, c, k) {
+      let lo = 0, hi = holdTimeFor(D, vmax);
+      for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (gapAfter(m, D, vmax, c, k) > gap) lo = m; else hi = m; }
+      return (lo + hi) / 2;
+    }
+    // how many meters the result moves per second of release timing, near the edge
+    function sensitivity(D, vmax, c, k) {
+      const t0 = releaseFor(0, D, vmax, c, k), h = 1e-4;
+      return (gapAfter(t0 - h, D, vmax, c, k) - gapAfter(t0 + h, D, vmax, c, k)) / (2 * h);
+    }
+
+    // ---- fair targets (see tools/sim and reports for how these were chosen) ----
+    // Release-timing noise of the reference ("average") player on a FIRST try at a cliff (seconds):
+    // human timing spread, touch-screen sampling (uniform over q) and the misjudgment of a cliff not
+    // seen before (learned = 1: none of it learned yet). Retries are easier: the ghost helps.
+    const REF = { st: 0.015, q: 0.008, bias0: 0.040, learned: 1 };
+    function timingSigma(prof) {
+      const p = prof || REF;
+      return Math.sqrt(p.st * p.st + p.q * p.q / 12 + p.learned * p.bias0 * p.bias0);
+    }
+    // inverse standard normal CDF (Acklam's approximation, |error| < 1.2e-9)
+    function normInv(pr) {
+      const a = [-39.6968302866538, 220.946098424521, -275.928510446969, 138.357751867269, -30.6647980661472, 2.50662827745924];
+      const b = [-54.4760987982241, 161.585836858041, -155.698979859887, 66.8013118877197, -13.2806815528857];
+      const c = [-0.00778489400243029, -0.322396458041136, -2.40075827716184, -2.54973253934373, 4.37466414146497, 2.93816398269878];
+      const d = [0.00778469570904146, 0.32246712907004, 2.445134137143, 3.75440866190742];
+      const pl = 0.02425;
+      if (pr < pl) { const q = Math.sqrt(-2 * Math.log(pr)); return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1); }
+      if (pr > 1 - pl) { const q = Math.sqrt(-2 * Math.log(1 - pr)); return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1); }
+      const q = pr - 0.5, r = q * q;
+      return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
+    }
+    // Intended FIRST-try success of the reference player on cliff n (the difficulty curve).
+    const CURVE = { start: 0.92, n1: 3, mid: 0.60, n2: 10, late: 0.40, n3: 20, plateau: 0.25, n4: 50, relief: 0.12 };
+    function successGoal(n) {
+      const C = CURVE;
+      let p;
+      if (n <= C.n1) p = C.start;
+      else if (n <= C.n2) p = C.start + (C.mid - C.start) * (n - C.n1) / (C.n2 - C.n1);
+      else if (n <= C.n3) p = C.mid + (C.late - C.mid) * (n - C.n2) / (C.n3 - C.n2);
+      else if (n <= C.n4) p = C.late + (C.plateau - C.late) * (n - C.n3) / (C.n4 - C.n3);
+      else p = C.plateau;
+      if (n > 1 && (n - 1) % 5 === 0) p = Math.min(C.start, p + C.relief);   // checkpoint cliffs: a breather
+      return p;
+    }
+    // Target (cm) giving success probability p for a cliff, 0.5..100 cm. Rounded up to what the
+    // screen shows exactly: whole cm from 10 cm, half cm below (the shown target is the real one).
+    function targetFor(p, D, vmax, c, k, prof) {
+      const sPos = sensitivity(D, vmax, c, k) * timingSigma(prof);          // result spread (m)
+      const T = 2 * sPos * normInv((1 + p) / 2) * 100;
+      const r = T >= 10 ? Math.ceil(T) : Math.ceil(T * 2) / 2;
+      return Math.min(100, Math.max(0.5, r));
+    }
+
+    // ---- stop quality: PERFECT < GREAT < success threshold, always in that order ----
+    const GRADE = { greatFrac: 0.4, greatMax: 10, perfectFrac: 0.2, perfectMax: 2 };
+    function grade(resultCm, targetCm) {
+      if (typeof resultCm !== 'number' || !(resultCm >= 0) || !(resultCm < targetCm)) return null;   // only successful stops
+      const great = Math.min(GRADE.greatMax, GRADE.greatFrac * targetCm);
+      const perfect = Math.min(GRADE.perfectMax, GRADE.perfectFrac * targetCm, great * 0.5);
+      return resultCm < perfect ? 'PERFECT' : resultCm < great ? 'GREAT' : 'GOOD';
+    }
+
+    // ---- cliffs ----
+    // seeded layout: same numbers for everyone for the same key (daily, and cliffs 11+)
+    function seededParams(key) {
+      let h = 2166136261;
+      for (const ch of key) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+      let a = h >>> 0;
+      const r = () => { a = (a + 0x6D2B79F5) >>> 0; let x = a; x = Math.imul(x ^ (x >>> 15), x | 1); x ^= x + Math.imul(x ^ (x >>> 7), x | 61); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
+      return {
+        si: Math.floor(r() * SURFACES.length),
+        dist: Math.round((8 + r() * 5) * 1000) / 1000,
+        vmax: Math.round((6 + r() * 3) * 1000) / 1000,
+      };
+    }
+    // First 10 cliffs, designed by hand (si: 0 road, 1 ice, 2 mud). See reports for each one's purpose.
+    // Road first; mud from cliff 3, mixed in gradually; ice only where the car is already at top
+    // speed when you let go (forgiving: the result moves at the car's speed, not faster), never two
+    // ice cliffs in a row; checkpoint cliff 6 is a gentle first ice.
+    const CURATED = [
+      { si: 0, dist: 8,  vmax: 6 },     //  1 road, slow: learn hold and release
+      { si: 0, dist: 10, vmax: 6 },     //  2 road, longer drive
+      { si: 2, dist: 9,  vmax: 6 },     //  3 first mud: stops much sooner
+      { si: 0, dist: 11, vmax: 6.5 },   //  4 road, a bit faster
+      { si: 2, dist: 11, vmax: 7 },     //  5 mud, faster
+      { si: 1, dist: 11, vmax: 6 },     //  6 checkpoint: first ice, slow, top speed well before you let go
+      { si: 0, dist: 12, vmax: 8 },     //  7 fast road
+      { si: 2, dist: 12, vmax: 8.5 },   //  8 fast mud
+      { si: 0, dist: 13, vmax: 8.5 },   //  9 long fast road
+      { si: 1, dist: 13, vmax: 6.5 },   // 10 second ice, still at top speed when you let go
+    ];
+    function cliffParams(n) { return n >= 1 && n <= CURATED.length ? Object.assign({}, CURATED[n - 1]) : seededParams('cliff-' + n); }
+    function cliffTarget(n, prm) {
+      const S = SURFACES[prm.si];
+      return targetFor(successGoal(n), prm.dist, prm.vmax, S.base, S.drag);
+    }
+
+    // =====================================================================================
+    // Story cliffs (V3 worlds). A cliff is a "spec": every twist is part of the motion itself,
+    // computed with the same closed-form pieces, so the simulator reproduces it exactly.
+    //   si, dist, vmax       ground, distance from the car front to the edge (m), top speed
+    //   slope                downhill grade (+ = downhill toward the edge): pulls the car on
+    //   wind                 constant push in m/s² (+ = tail wind toward the edge, - = head wind)
+    //   gs                   gravity scale (1 = Earth, Moon < 1): grip and braking scale with it
+    //   patches [{at, si}]   ground changes when the car front has travelled `at` metres
+    //   crumble [{at, len}]  when the front reaches `at`, a piece `len` long breaks off the edge
+    //   fog, quake           harder to see / steady: visual only, but the target is sized for it
+    // Holding: accel (ACCEL + gravity along the slope + wind) up to vmax, whatever the ground.
+    // Sliding on each piece of ground: dv/dt = -(c + k v), c = base*gs - g*gs*slope - wind, k = drag*gs.
+    // =====================================================================================
+    const G = 9.8;
+    function spec(o) {
+      return Object.assign({ slope: 0, wind: 0, gs: 1, patches: [], crumble: [], fog: 0, quake: 0, boss: false }, o);
+    }
+    function holdAccel(sp) { return ACCEL + G * sp.gs * sp.slope + sp.wind; }
+    function groundCK(sp, si) {
+      const S = SURFACES[si];
+      return { c: S.base * sp.gs - G * sp.gs * sp.slope - sp.wind, k: S.drag * sp.gs };
+    }
+    // pieces of ground along the road, in metres travelled by the car front
+    function segments(sp) {
+      const out = [], ps = sp.patches.slice().sort((a, b) => a.at - b.at);
+      let x0 = 0, si = sp.si;
+      for (const p of ps) { out.push(Object.assign({ x0, x1: p.at, si }, groundCK(sp, si))); x0 = p.at; si = p.si; }
+      out.push(Object.assign({ x0, x1: Infinity, si }, groundCK(sp, si)));
+      return out;
+    }
+    function holdS(tau, sp) {
+      const a = holdAccel(sp), vmax = sp.vmax;
+      if (!(tau > 0)) return { d: 0, v: 0, a };
+      const tv = vmax / a;
+      if (tau < tv) return { d: 0.5 * a * tau * tau, v: a * tau, a };
+      return { d: 0.5 * vmax * tv + vmax * (tau - tv), v: vmax, a: 0 };
+    }
+    function holdTimeForS(dist, sp) {
+      if (!(dist > 0)) return 0;
+      const a = holdAccel(sp), tv = sp.vmax / a, dv = 0.5 * sp.vmax * tv;
+      return dist <= dv ? Math.sqrt(2 * dist / a) : tv + (dist - dv) / sp.vmax;
+    }
+    // A slide from travel x0 at speed v0, piece by piece. Each phase is one closed-form piece.
+    function slidePlan(x0, v0, sp) {
+      const segs = segments(sp), phases = [];
+      let x = x0, v = v0, t = 0, j = 0;
+      while (j < segs.length - 1 && x >= segs[j].x1) j++;
+      for (;;) {
+        const g = segs[j], sd = stopDist(v, g.c, g.k);
+        if (x + sd <= g.x1 || j === segs.length - 1) {
+          const st = stopTime(v, g.c, g.k);
+          phases.push({ t0: t, x0: x, v0: v, c: g.c, k: g.k, si: g.si, dur: st });
+          return { phases, stopX: x + sd, stopT: t + st };
+        }
+        const dt = slideTimeFor(g.x1 - x, v, g.c, g.k);
+        phases.push({ t0: t, x0: x, v0: v, c: g.c, k: g.k, si: g.si, dur: dt });
+        v = slide(dt, v, g.c, g.k).v; x = g.x1; t += dt; j++;
+      }
+    }
+    // position (travel), speed and accel `sig` seconds after the slide began
+    function planAt(plan, sig) {
+      const ph = plan.phases;
+      let i = 0;
+      while (i < ph.length - 1 && sig >= ph[i].t0 + ph[i].dur) i++;
+      const p = ph[i], m = slide(Math.min(sig - p.t0, p.dur), p.v0, p.c, p.k);
+      return { d: p.x0 + m.d, v: m.v, a: m.a, si: p.si };
+    }
+    // seconds after the slide began at which the front reaches travel x (< stopX)
+    function planTimeFor(plan, x) {
+      for (const p of plan.phases) {
+        const end = p.x0 + slide(p.dur, p.v0, p.c, p.k).d;
+        if (x <= end) return p.t0 + slideTimeFor(x - p.x0, p.v0, p.c, p.k);
+      }
+      return plan.stopT;
+    }
+    // where the edge is once the front has travelled up to `reach` (pieces break off on the way)
+    function edgeAt(sp, reach) {
+      let E = sp.dist;
+      for (const c of sp.crumble.slice().sort((a, b) => a.at - b.at)) if (c.at <= Math.min(reach, E)) E -= c.len;
+      return E;
+    }
+    // Whole attempt for a spec: release after holding `tau` s. Returns the final gap (m, < 0 = fall).
+    function gapS(tau, sp) {
+      const h = holdS(tau, sp), plan = slidePlan(h.d, h.v, sp);
+      return edgeAt(sp, plan.stopX) - plan.stopX;
+    }
+    function releaseS(gap, sp) {
+      let lo = 0, hi = holdTimeForS(edgeAt(sp, Infinity), sp);
+      for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (gapS(m, sp) > gap) lo = m; else hi = m; }
+      return (lo + hi) / 2;
+    }
+    function sensitivityS(sp) {
+      const t0 = releaseS(0, sp), h = 1e-4;
+      return (gapS(t0 - h, sp) - gapS(t0 + h, sp)) / (2 * h);
+    }
+    // Fog and shaking make the moment harder to judge: the reference player's misjudgment grows,
+    // so the target grows with it (still the same intended chance of success).
+    function refFor(sp) {
+      return { st: REF.st * (1 + 0.5 * sp.quake), q: REF.q, bias0: REF.bias0 * (1 + sp.fog), learned: REF.learned };
+    }
+    // Intended first-try success on story cliff n: the V2 curve; boss cliffs a little harder.
+    function storyGoal(n, sp) { return Math.max(0.2, successGoal(n) - (sp.boss ? 0.05 : 0)); }
+    function targetS(p, sp) {
+      const sPos = sensitivityS(sp) * timingSigma(refFor(sp));
+      const T = 2 * sPos * normInv((1 + p) / 2) * 100;
+      const r = T >= 10 ? Math.ceil(T) : Math.ceil(T * 2) / 2;
+      return Math.min(100, Math.max(0.5, r));
+    }
+
+    // ---- the worlds: 5 worlds x 10 hand-made cliffs (same for every player) ----
+    const WORLDS = [
+      { name: 'GREEN HILLS', twist: 'Road, ice and mud' },
+      { name: 'DESERT', twist: 'Wind and sand' },
+      { name: 'SNOW MOUNTAIN', twist: 'Ground changes, fog' },
+      { name: 'MOON', twist: 'Low gravity' },
+      { name: 'VOLCANO', twist: 'Crumbling edge' },
+    ];
+    const CLIFFS = [
+      // World 1: Green Hills — V2's first 9 cliffs, then the boss: a long downhill slope.
+      ...CURATED.slice(0, 9).map(c => spec(c)),
+      spec({ si: 0, dist: 16, vmax: 8, slope: 0.1, boss: true }),   // 10 BOSS: long downhill, the slope keeps pulling
+    ];
+    function worldOf(n) { return Math.min(WORLDS.length, Math.floor((n - 1) / 10) + 1); }
+    // Spec for story cliff n. Worlds not built yet fall back to the seeded V2 cliffs.
+    function cliffSpec(n) {
+      if (n >= 1 && n <= CLIFFS.length) return spec(JSON.parse(JSON.stringify(CLIFFS[n - 1])));
+      return spec(seededParams('cliff-' + n));
+    }
+    function storyTarget(n, sp) { return targetS(storyGoal(n, sp), sp); }
+
+    return { ACCEL, SURFACES, hold, holdTimeFor, stopTime, stopDist, slide, slideTimeFor, gapAfter, releaseFor,
+             sensitivity, REF, timingSigma, normInv, CURVE, successGoal, targetFor, GRADE, grade,
+             seededParams, CURATED, cliffParams, cliffTarget,
+             G, spec, holdAccel, groundCK, segments, holdS, holdTimeForS, slidePlan, planAt, planTimeFor, edgeAt,
+             gapS, releaseS, sensitivityS, refFor, storyGoal, targetS, WORLDS, CLIFFS, worldOf, cliffSpec, storyTarget };
+  })();
+  /* PHYSICS-END */
+
+  // Visual look of each ground type (physics values come from Physics.SURFACES).
+  const SURFACE_LOOK = {
+    ROAD: { top: '#6a6e84', side: '#3d4052', dust: '#c9cbd6' },
+    ICE:  { top: '#d4f1ff', side: '#7cc4e6', dust: '#ffffff' },
+    MUD:  { top: '#8a5a33', side: '#5e3b1f', dust: '#a8774a' },
+  };
+  const SURFACES = Physics.SURFACES.map(p => Object.assign({}, p, SURFACE_LOOK[p.name]));
+
+  // Character looks. Only one for now; later these become cosmetic items (never affect score).
+  const SKINS = [
+    { id: 'pinky', name: 'Pinky', body: '#ff4f7b', shade: '#d93a64', roof: '#ffd23f', ball: '#7ef9ff' },
+  ];
+  let skin = SKINS[0];
+
+  // Endless cliffs. Progress is never wiped:
+  //  - 3 hearts: a miss costs one heart and you retry the same cliff;
+  //  - a checkpoint every 5 cliffs (1, 6, 11, 16...): losing all hearts sends you back only to it;
+  //  - the current cliff is saved, so closing the game keeps your place.
+  // Score: the farthest cliff reached. Each cliff's target comes from Physics.cliffTarget: it is sized
+  // so a typical player has a chosen chance of success (the difficulty curve), never by luck.
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  // Older Safari (before 16) has no canvas roundRect(). Same shape drawn with arcTo, so the look is identical.
+  // Accepts a single radius or an array [all] / [tl-br, tr-bl] / [tl, tr-bl, br] / [tl, tr, br, bl], like the native one.
+  if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+      let a = Array.isArray(r) ? r.slice() : [r === undefined ? 0 : r];
+      let tl, tr, br, bl;
+      if (a.length === 1) tl = tr = br = bl = a[0];
+      else if (a.length === 2) { tl = br = a[0]; tr = bl = a[1]; }
+      else if (a.length === 3) { tl = a[0]; tr = bl = a[1]; br = a[2]; }
+      else { tl = a[0]; tr = a[1]; br = a[2]; bl = a[3]; }
+      const m = Math.min(Math.abs(w), Math.abs(h)) / 2;
+      tl = Math.min(+tl || 0, m); tr = Math.min(+tr || 0, m); br = Math.min(+br || 0, m); bl = Math.min(+bl || 0, m);
+      this.moveTo(x + tl, y);
+      this.lineTo(x + w - tr, y);
+      this.arcTo(x + w, y, x + w, y + tr, tr);
+      this.lineTo(x + w, y + h - br);
+      this.arcTo(x + w, y + h, x + w - br, y + h, br);
+      this.lineTo(x + bl, y + h);
+      this.arcTo(x, y + h, x, y + h - bl, bl);
+      this.lineTo(x, y + tl);
+      this.arcTo(x, y, x + tl, y, tl);
+      this.closePath();
+      return this;
+    };
+  }
+  let scale = 1, dpr = 1;
+
+  function resize() {
+    const vw = document.body.clientWidth, vh = document.body.clientHeight;
+    scale = Math.min(vw / W, vh / H);
+    // Cap the drawing size at 1080x1920 (TikTok's standard): sharp, but light for phones and clip recording.
+    dpr = Math.min(window.devicePixelRatio || 1, 1080 / (W * scale));
+    canvas.style.width = (W * scale) + 'px';
+    canvas.style.height = (H * scale) + 'px';
+    canvas.width = Math.round(W * scale * dpr);
+    canvas.height = Math.round(H * scale * dpr);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- Saved progress (optional, may be unavailable) ----------
+  // Storage keys: the platform build saves under its own names (cg_ prefix), so the preview on the
+  // same website never reads or changes the web version's saved progress. The web build keeps the
+  // original names unchanged. No data is moved or deleted.
+  // An experimental build may set its own prefix (window.CLIFF_STORE_PREFIX, e.g. 'cg2_') so it is
+  // isolated from both of the others too. Only short lowercase prefixes are accepted.
+  const STORE_PREFIX = IS_PORTAL
+    ? (typeof window.CLIFF_STORE_PREFIX === 'string' && /^[a-z0-9_]{1,8}$/.test(window.CLIFF_STORE_PREFIX) ? window.CLIFF_STORE_PREFIX : 'cg_')
+    : '';
+  function storeKey(key) { return STORE_PREFIX + key; }
+  function load(key, fallback) { try { const v = localStorage.getItem(storeKey(key)); return v === null ? fallback : parseFloat(v); } catch (e) { return fallback; } }
+  function save(key, v) { try { localStorage.setItem(storeKey(key), String(v)); } catch (e) {} }
+  let best = load('cliff_best', null);
+  const HEARTS = 3, CP_EVERY = 5;
+  const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.floor(Number(v) || lo)));
+  let cliff = clampInt(load('cliff_cur', 1), 1, 100000);          // cliff being played
+  let checkpoint = clampInt(load('cliff_cp', 1), 1, cliff);       // where a lost life sends you back to
+  let hearts = clampInt(load('cliff_hearts', HEARTS), 1, HEARTS);
+  let roundsPlayed = clampInt(load('cliff_rounds', 0), 0, 1e9);
+  let bestCliff = clampInt(load('cliff_bestcliff', 1), cliff, 100000);   // the number players compete on
+  const isCheckpoint = n => (n - 1) % CP_EVERY === 0;
+  function saveProgress() {
+    save('cliff_cur', cliff); save('cliff_cp', checkpoint); save('cliff_hearts', hearts); save('cliff_bestcliff', bestCliff);
+  }
+
+  // ---------- Round state ----------
+  // states: ready -> holding -> sliding -> stopped | falling -> fell
+  let s;
+  const cam = { z: 1, fx: CAM_ANCHOR_X, fy: GROUND_Y };
+  let particles = [];
+  let shake = 0;
+
+  let roundCounter = 0;
+  // A friend's challenge link (?c=surface-distance-speed&s=score) replays the exact same cliff.
+  // Values come from a link anyone can edit, so each is checked against the normal ranges.
+  const FRIEND_TRIES = 3;
+  let friend = null;
+  try {
+    const q = new URLSearchParams(location.search);
+    const c = (q.get('c') || '').split('-').map(Number);
+    const sc = q.get('s');
+    if (!IS_PORTAL && c.length === 3 && c.every(Number.isInteger)) {   // platform build: no external challenge links
+      const si = c[0], dist = c[1] / 1000, vmax = c[2] / 1000;
+      const score = sc === 'x' ? null : Number(sc) / 10;
+      const okRound = si >= 0 && si < SURFACES.length && dist >= 8 && dist <= 13 && vmax >= 6 && vmax <= 9;
+      const okScore = sc === 'x' || (sc !== null && Number.isFinite(score) && score >= 0 && score <= 1300);
+      if (okRound && okScore) friend = { si, dist, vmax, score, tries: 0, won: false };
+    }
+  } catch (e) {}
+
+  // ---- Daily challenge: one cliff for the whole world each day (UTC), 3 tries, plus a day streak ----
+  const DAILY_TRIES = 3;
+  const dayKey = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 10);   // e.g. 2026-11-03
+  function loadJSON(key) { try { return JSON.parse(localStorage.getItem(storeKey(key)) || 'null'); } catch (e) { return null; } }
+  function saveJSON(key, v) { try { localStorage.setItem(storeKey(key), JSON.stringify(v)); } catch (e) {} }
+  function getDaily() {
+    let d = loadJSON('cliff_daily');
+    if (!d || d.day !== dayKey()) d = { day: dayKey(), tries: 0, best: null };
+    return d;
+  }
+  function dailyLeft() { return DAILY_TRIES - getDaily().tries; }
+  function getStreak() {
+    const st = loadJSON('cliff_streak');
+    if (!st) return 0;
+    // A streak survives today and yesterday; any older and it has been broken.
+    return (st.last === dayKey() || st.last === dayKey(Date.now() - 864e5)) ? (st.count | 0) : 0;
+  }
+  function markStreak() {
+    const st = loadJSON('cliff_streak') || { last: '', count: 0 };
+    if (st.last === dayKey()) return;
+    st.count = st.last === dayKey(Date.now() - 864e5) ? (st.count | 0) + 1 : 1;
+    st.last = dayKey();
+    saveJSON('cliff_streak', st);
+  }
+  // Same numbers for everyone on the same date: a small seeded random generator.
+  // Assist (default): ruler on the cliff, live distance while holding, fixed layout per cliff,
+  // and a ghost of your previous try on the same cliff. Add ?classic=1 to the link for the old version.
+  const ASSIST = !new URLSearchParams(location.search).has('classic');
+  let lastTry = null;   // { key, release, stop } in meters (car front), from the previous try
+
+  function dailyParams() { return Physics.seededParams('cliff-edge-' + dayKey()); }
+  function nextDailyIn() {
+    const now = new Date();
+    const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+    const sec = Math.max(0, Math.floor((next - now.getTime()) / 1000));
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(Math.floor(sec / 3600))}:${pad(Math.floor(sec / 60) % 60)}:${pad(sec % 60)}`;
+  }
+  let mode = 'run';   // 'run' = endless cliffs, 'daily' = today's challenge
+
+  // ---- Playtest metrics: anonymous events only (no names, emails or personal data) ----
+  // Sent only from the public site. The key is Supabase's public "publishable" key, made for web pages;
+  // the table accepts new rows only, so nobody can read or change the data with it.
+  const Track = (() => {
+    const URL_ = 'https://twgbgjwweanifxngkzrd.supabase.co/rest/v1/events';
+    const KEY = 'sb_publishable_fRMxd1l7QJ0Rj5Tvysw1jg_I60GWXjT';
+    const on = !IS_PORTAL && (location.hostname === 'waeel1899464.github.io' || /[?&]track=1/.test(location.search));
+    const rid = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
+    let device = null;
+    try { device = localStorage.getItem(storeKey('cliff_dev')); if (!device) { device = rid(); localStorage.setItem(storeKey('cliff_dev'), device); } } catch (e) {}
+    if (!device) device = rid();
+    const session = rid();
+    function send(event, value = null) {
+      if (!on) return;
+      try {
+        fetch(URL_, {
+          method: 'POST', keepalive: true,
+          headers: { 'apikey': KEY, 'Authorization': 'Bearer ' + KEY, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+          body: JSON.stringify({ device, session, event, value }),
+        }).catch(() => {});
+      } catch (e) {}
+    }
+    return { send };
+  })();
+
+  function newRound() {
+    // Rounded to the millimetre so a challenge link reproduces the round exactly.
+    let si = Math.floor(Math.random() * SURFACES.length);
+    let dist = Math.round((8 + Math.random() * 5) * 1000) / 1000;   // meters from car front to edge
+    let vmax = Math.round((6 + Math.random() * 3) * 1000) / 1000;
+    let fr = null, daily = false, sp = null;
+    if (friend && !friend.won && friend.tries < FRIEND_TRIES) {
+      friend.tries++;
+      fr = friend; si = fr.si; dist = fr.dist; vmax = fr.vmax;
+    } else if (mode === 'daily' && dailyLeft() > 0) {
+      daily = true;
+      ({ si, dist, vmax } = dailyParams());
+    } else {
+      mode = 'run';
+      if (ASSIST) { sp = Physics.cliffSpec(cliff); ({ si, dist, vmax } = sp); }   // story cliffs: same for everyone
+    }
+    if (!sp) sp = Physics.spec({ si, dist, vmax });                               // plain cliff, no twists
+    const surface = SURFACES[si];
+    const layoutKey = fr ? 'friend' : daily ? 'daily-' + dayKey() : 'cliff-' + cliff + (ASSIST ? '' : '-' + roundCounter);
+    s = {
+      id: ++roundCounter,
+      state: 'ready',
+      surface,
+      params: { si, dist, vmax },
+      friend: fr, friendTry: fr ? fr.tries : 0, friendWin: false,
+      daily, dailyDay: daily ? dayKey() : null, dailyTry: 0, newDailyBest: false, layoutKey, releaseFront: null,
+      cliff, target: Physics.storyTarget(cliff, sp), grade: null, spec: sp, plan: null, surfNow: surface,
+      world: Physics.worldOf(cliff), worldDone: false, cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
+      vmax,
+      x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
+      x0: EDGE_X / PPM - dist - CAR_LEN, dist,
+      v: 0, a: 0,
+      // Exact timing (ms, performance.now timebase): press, release, and when the car stops or
+      // crosses the edge. The result is decided at the release moment itself, not at a frame.
+      tPress: 0, tRel: 0, relD: 0, relV: 0, gap: null, stopAt: Infinity, crossAt: Infinity,
+      tilt: 0, tiltV: 0,                              // body pitch (spring)
+      eyeX: 1.5, eyeV: 0, eyeY: 0, eyeYV: 0, ant: 0, antV: 0, sq: 0, sqV: 0,
+      result: null, newBest: false, beat: false,
+      endAt: 0,
+      parts: null, fallT: 0, splashed: false, fallMsg: '',
+    };
+    particles = [];
+  }
+  newRound();
+  Track.send(friend ? 'challenge_open' : 'open', roundsPlayed);
+
+  // ---------- Input: one press, one release ----------
+  let activePointer = null;
+  const MUTE_X = W - 44, MUTE_Y = 50;
+  // Mouse/trackpad devices get keyboard wording in the instructions.
+  const FINE_POINTER = !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+  function press(e) {
+    e.preventDefault();
+    // preventDefault also stops the browser from moving keyboard focus into this page. Inside a
+    // platform iframe that would leave Space/Enter going to the platform page, so ask for focus.
+    try { window.focus(); } catch (err) {}
+    Sound.init();
+    const rect = canvas.getBoundingClientRect();
+    const lx = (e.clientX - rect.left) / scale, ly = (e.clientY - rect.top) / scale;
+    if (Math.hypot(lx - MUTE_X, ly - MUTE_Y) < 34) { Sound.toggleMute(); return; }
+    if (challengeVisible() && inBtn(CHALLENGE_BTN, lx, ly)) { pendingChallenge = true; return; }
+    if (shareVisible() && inShareBtn(lx, ly)) { pendingShare = true; return; }
+    if (pillVisible() && inBtn(DAILY_PILL, lx, ly + 0)) { toggleDaily(); return; }
+    pressGame(e.pointerId, evT(e));
+  }
+  // The moment an input really happened. Event timestamps share performance.now's clock; a missing,
+  // non-finite or out-of-range one (old browsers used a different clock) falls back to "now".
+  function evT(e) {
+    const now = performance.now(), t = e && e.timeStamp;
+    if (typeof t === 'number' && isFinite(t) && t > now - 1000 && t <= now + 5) return Math.min(t, now);
+    return now;
+  }
+  // The one game action, shared by touch, mouse and keyboard: start driving, or start the next round.
+  function pressGame(id, t) {
+    const now = performance.now();
+    if (s.state === 'ready') {
+      // A daily screen opened before midnight (UTC) shows yesterday's cliff: switch to today's
+      // cliff first, without using a try. The player presses again to play it.
+      if (s.daily && s.dailyDay !== dayKey()) { newRound(); return; }
+      if (s.daily) {
+        const d = getDaily(); d.tries++; saveJSON('cliff_daily', d);
+        s.dailyTry = d.tries;
+        markStreak();
+      }
+      activePointer = id;
+      if (typeof id === 'number') { try { canvas.setPointerCapture(id); } catch (err) {} }
+      s.state = 'holding';
+      s.tPress = t === undefined ? now : t;
+      s.crossAt = s.tPress + Physics.holdTimeForS(Physics.edgeAt(s.spec, Infinity), s.spec) * 1000;   // still holding then = over the edge
+      roundsPlayed++; save('cliff_rounds', roundsPlayed);
+      Track.send(s.daily ? 'daily' : 'round', s.daily ? s.dailyTry : s.cliff);
+      Rec.start(s.id);
+      return;
+    }
+    if ((s.state === 'stopped' || s.state === 'fell' || s.state === 'falling') && now - s.endAt > 300) {
+      newRound();
+    }
+  }
+  function release(e) {
+    Sound.init();   // phones only unlock audio on a finger lift
+    if (pendingChallenge) { pendingChallenge = false; doChallenge(); return; }
+    if (pendingShare) { pendingShare = false; doShare(); return; }
+    if (activePointer !== null && e.pointerId !== activePointer) return;
+    activePointer = null;
+    if (s.state === 'holding') releaseAt(evT(e));
+  }
+  // Let go at time t (ms): position and speed at that exact moment decide the whole outcome.
+  function releaseAt(t) {
+    t = Math.max(s.tPress, t);
+    if (t >= s.crossAt) return;                       // already past the edge: the fall is certain
+    const h = Physics.holdS((t - s.tPress) / 1000, s.spec);
+    const plan = Physics.slidePlan(h.d, h.v, s.spec);                // the whole slide, piece by piece
+    const E = Physics.edgeAt(s.spec, plan.stopX);                    // edge after any pieces break off
+    s.state = 'sliding';
+    s.tRel = t; s.relD = h.d; s.relV = h.v; s.plan = plan;
+    s.releaseFront = s.x0 + CAR_LEN + h.d;
+    s.gap = E - plan.stopX;                                          // final distance to the edge (m)
+    if (s.gap >= 0) { s.stopAt = t + plan.stopT * 1000; s.crossAt = Infinity; }
+    else { s.stopAt = Infinity; s.crossAt = t + Physics.planTimeFor(plan, E) * 1000; }
+  }
+  // Car position and speed at time t (ms), straight from the equations.
+  function motionAt(t) {
+    if (s.state === 'holding' || t < s.tRel) {
+      const h = Physics.holdS((t - s.tPress) / 1000, s.spec);
+      return { d: h.d, v: h.v, a: h.v > 0 ? h.a : 0 };
+    }
+    return Physics.planAt(s.plan, (t - s.tRel) / 1000);              // d = metres travelled
+  }
+  // metres travelled by the car front, and the gap to the edge right now (the edge can move)
+  function travel() { return frontX() - (s.x0 + CAR_LEN); }
+  function gapNow() { return Physics.edgeAt(s.spec, travel()) - travel(); }
+  function surfaceAt(d) {
+    const g = Physics.segments(s.spec).find(x => d < x.x1);
+    return SURFACES[g ? g.si : s.spec.si];
+  }
+  canvas.addEventListener('pointerdown', press);
+
+  // Keyboard: Space, Enter or Arrow Up work like holding the screen. Key auto-repeat is ignored,
+  // so holding a key never fires extra actions. Other keys are left alone.
+  const GAME_KEYS = { ' ': 1, 'Spacebar': 1, 'Enter': 1, 'ArrowUp': 1, 'Up': 1 };
+  window.addEventListener('keydown', e => {
+    if (!GAME_KEYS[e.key] || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!sheetEl.hidden) return;              // the share panel uses Enter/Space for its own buttons
+    e.preventDefault();                       // no page scroll inside the platform frame
+    if (e.repeat) return;
+    if (activePointer !== null) return;       // already holding with touch or mouse
+    Sound.init();
+    pressGame('key');
+  });
+  window.addEventListener('keyup', e => {
+    if (!GAME_KEYS[e.key]) return;
+    e.preventDefault();
+    if (activePointer === 'key') release({ pointerId: 'key', timeStamp: e.timeStamp });
+  });
+  // If the window loses focus or the page is hidden while holding (key, mouse or finger), let go
+  // (otherwise the car would drive off the cliff while the player can't see it).
+  function releaseAll() { if (activePointer !== null) release({ pointerId: activePointer }); }
+  window.addEventListener('blur', releaseAll);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('lostpointercapture', release);
+  window.addEventListener('pointerup', release);
+  window.addEventListener('pointercancel', release);
+  const block = e => e.preventDefault();
+  canvas.addEventListener('touchstart', block, { passive: false });
+  canvas.addEventListener('touchmove', block, { passive: false });
+  canvas.addEventListener('touchend', block, { passive: false });
+  window.addEventListener('contextmenu', block);
+
+  // ---------- Sound (all synthesized, no audio files) ----------
+  const Sound = (() => {
+    let ac = null, master = null, noiseBuf = null;
+    let eng = null, skid = null;
+    let muted = load('cliff_muted', 0) === 1;
+    let compNode = null, recDest = null;
+
+    function init() {
+      if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      try { ac = new AC(); } catch (e) { return; }
+      master = ac.createGain();
+      master.gain.value = muted ? 0 : 0.8;
+      // Limiter so overlapping sounds (scream + splash) never crackle.
+      const comp = ac.createDynamicsCompressor();
+      comp.threshold.value = -10; comp.knee.value = 6; comp.ratio.value = 12;
+      comp.attack.value = 0.003; comp.release.value = 0.15;
+      master.connect(comp); comp.connect(ac.destination);
+      compNode = comp;
+
+      noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+
+      // Engine: two detuned buzzy oscillators through a low-pass filter.
+      const o1 = ac.createOscillator(), o2 = ac.createOscillator();
+      o1.type = 'sawtooth'; o2.type = 'square';
+      const f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 700;
+      const g = ac.createGain(); g.gain.value = 0;
+      o1.connect(f); o2.connect(f); f.connect(g); g.connect(master);
+      o1.start(); o2.start();
+      eng = { o1, o2, f, g };
+
+      // Tire skid: looping noise through a band-pass filter.
+      const n = ac.createBufferSource(); n.buffer = noiseBuf; n.loop = true;
+      const bf = ac.createBiquadFilter(); bf.type = 'bandpass'; bf.frequency.value = 1800; bf.Q.value = 2;
+      const sg = ac.createGain(); sg.gain.value = 0;
+      n.connect(bf); bf.connect(sg); sg.connect(master); n.start();
+      skid = { bf, sg };
+    }
+
+    const SKID = { ROAD: { f: 1800, q: 2, vol: 0.22 }, ICE: { f: 3400, q: 9, vol: 0.16 }, MUD: { f: 380, q: 1, vol: 0.35 } };
+
+    function update(st) {
+      if (!ac) return;
+      const t = ac.currentTime;
+      const driving = st.state === 'holding';
+      const sliding = st.state === 'sliding';
+      const base = 42 + st.v * 16;
+      eng.o1.frequency.setTargetAtTime(base, t, 0.05);
+      eng.o2.frequency.setTargetAtTime(base * 0.502, t, 0.05);
+      eng.f.frequency.setTargetAtTime(500 + st.v * 140, t, 0.05);
+      const engVol = driving ? 0.13 : sliding ? 0.05 * Math.min(1, st.v / 3) : 0;
+      eng.g.gain.setTargetAtTime(engVol, t, driving ? 0.03 : 0.12);
+
+      const sk = SKID[(st.surfNow || st.surface).name] || SKID.ROAD;
+      skid.bf.frequency.setTargetAtTime(sk.f + st.v * 60, t, 0.05);
+      skid.bf.Q.value = sk.q;
+      const skVol = sliding && st.v > 0.2 ? sk.vol * Math.min(1, st.v / 5) : 0;
+      skid.sg.gain.setTargetAtTime(skVol, t, 0.05);
+    }
+
+    function env(gainNode, t, peak, attack, decay) {
+      gainNode.gain.setValueAtTime(0.0001, t);
+      gainNode.gain.exponentialRampToValueAtTime(peak, t + attack);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+    }
+
+    // Cartoon "AAAAH!": a buzzy voice with vowel formants, sliding down in pitch with wobble.
+    function scream() {
+      if (!ac) return;
+      const t = ac.currentTime;
+      const o = ac.createOscillator(); o.type = 'sawtooth';
+      o.frequency.setValueAtTime(620, t);
+      o.frequency.exponentialRampToValueAtTime(260, t + 1.4);
+      const lfo = ac.createOscillator(), lg = ac.createGain();
+      lfo.frequency.value = 7; lg.gain.value = 22;
+      lfo.connect(lg); lg.connect(o.frequency);
+      const out = ac.createGain();
+      [[800, 6, 1], [1150, 8, 0.6], [2800, 10, 0.25]].forEach(([fq, q, v]) => {
+        const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = fq; bp.Q.value = q;
+        const vg = ac.createGain(); vg.gain.value = v;
+        o.connect(bp); bp.connect(vg); vg.connect(out);
+      });
+      const g = ac.createGain(); out.connect(g); g.connect(master);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(1.4, t + 0.08);
+      g.gain.setValueAtTime(1.4, t + 1.0);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.5);
+      o.start(t); lfo.start(t); o.stop(t + 1.6); lfo.stop(t + 1.6);
+    }
+
+    function splash() {
+      if (!ac) return;
+      const t = ac.currentTime;
+      const n = ac.createBufferSource(); n.buffer = noiseBuf;
+      const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(4000, t);
+      lp.frequency.exponentialRampToValueAtTime(250, t + 0.7);
+      const g = ac.createGain(); env(g, t, 0.7, 0.01, 0.8);
+      n.connect(lp); lp.connect(g); g.connect(master); n.start(t); n.stop(t + 1);
+      // low "ploonk"
+      const o = ac.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.3);
+      const og = ac.createGain(); env(og, t, 0.6, 0.005, 0.35);
+      o.connect(og); og.connect(master); o.start(t); o.stop(t + 0.5);
+    }
+
+    function note(freq, when, dur, vol, type = 'sine') {
+      const t = ac.currentTime + when;
+      const o = ac.createOscillator(); o.type = type; o.frequency.value = freq;
+      const g = ac.createGain(); env(g, t, vol, 0.008, dur);
+      o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.05);
+    }
+
+    function ding()   { if (ac) { note(1319, 0, 0.6, 0.3); note(2637, 0, 0.4, 0.08); } }
+    function bloop()  { if (ac) { note(392, 0, 0.18, 0.18, 'triangle'); note(330, 0.09, 0.22, 0.15, 'triangle'); } }
+    function fanfare() {
+      if (!ac) return;
+      [523, 659, 784, 1047].forEach((f, i) => note(f, i * 0.09, i === 3 ? 0.7 : 0.18, 0.22, 'triangle'));
+      note(2093, 0.27, 0.5, 0.06);
+    }
+    // Small extras on top of the fanfare: GREAT adds one high bell, PERFECT a short sparkle.
+    function great() { if (ac) note(2637, 0.4, 0.45, 0.07); }
+    function perfect() { if (ac) [2093, 2637, 3136, 4186].forEach((f, i) => note(f, 0.4 + i * 0.06, 0.3, 0.06)); }
+    function pop() { if (ac) note(rand(500, 800), 0, 0.08, 0.12, 'square'); }
+
+    function toggleMute() {
+      muted = !muted;
+      save('cliff_muted', muted ? 1 : 0);
+      if (master) master.gain.setTargetAtTime(muted ? 0 : 0.8, ac.currentTime, 0.02);
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (!ac) return;
+      if (document.hidden) ac.suspend(); else ac.resume();
+    });
+
+    // Audio track for clip recording (game sounds go into the video).
+    function streamTrack() {
+      if (!ac || !compNode || !ac.createMediaStreamDestination) return null;
+      if (!recDest) { recDest = ac.createMediaStreamDestination(); compNode.connect(recDest); }
+      return recDest.stream.getAudioTracks()[0] || null;
+    }
+
+    return { init, update, scream, splash, ding, bloop, fanfare, great, perfect, pop, toggleMute, streamTrack, isMuted: () => muted };
+  })();
+
+  // ---------- Clip recorder: each round is recorded as a vertical video ----------
+  const Rec = (() => {
+    let stream = null, rec = null, chunks = [], startedAt = 0;
+    let onReady = null;   // waiting share request, run when the clip is finished
+    let finishing = -1;   // round whose recording is stopped but whose file is not ready yet
+    let clip = null, clipRound = -1, recRound = -1;
+    const MAX_MS = 12000;
+    // Recording reads a separate, smaller canvas (720x1280) that gets a copy of each game frame.
+    // Capturing the big game canvas directly broke drawing on some Android phones, and a smaller
+    // video is lighter to encode. 720x1280 is a normal vertical video size.
+    // Performance: this canvas is only created the first time a recording starts, and frames are
+    // copied into it only while a recorder is actually running (copyUsers > 0).
+    let recCanvas = null, recCtx = null;
+    function recSurface() {
+      if (!recCanvas) {
+        recCanvas = document.createElement('canvas');
+        recCanvas.width = 720; recCanvas.height = 1280;
+        recCtx = recCanvas.getContext('2d');
+      }
+      return recCanvas;
+    }
+    let copyUsers = 0;
+    function copyFrame() {
+      if (copyUsers <= 0 || !recCtx) return;
+      try { recCtx.drawImage(canvas, 0, 0, recCanvas.width, recCanvas.height); } catch (e) {}
+    }
+    // Platform build: clips are off (sharing and downloads are usually blocked inside platform iframes),
+    // so nothing here ever runs there.
+    function supported() { return !IS_PORTAL && !!(window.MediaRecorder && HTMLCanvasElement.prototype.captureStream); }
+    // MP4 plays everywhere (WhatsApp, Messenger, TikTok). Some browsers claim MP4 but write a file
+    // with no picture, so MP4 is used only after a half-second test recording proves it has video.
+    // Until then (or if the test fails) WebM is used.
+    const MP4 = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4;codecs=avc1', 'video/mp4'];
+    const WEBM = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+    const can = m => { try { return MediaRecorder.isTypeSupported(m); } catch (e) { return false; } };
+    let mp4Ok = false;
+    function pickMime() {
+      const mp4 = MP4.find(can), webm = WEBM.find(can);
+      if (mp4 && (mp4Ok || !webm)) return mp4;   // iPhone has no WebM: MP4 is its only choice
+      return webm || mp4 || '';
+    }
+    function testMp4() {
+      if (!supported()) return;
+      const mp4 = MP4.find(can);
+      if (!mp4 || !WEBM.find(can)) return;
+      let st;
+      try { st = recSurface().captureStream(30); } catch (e) { return; }
+      const parts = [];
+      let r;
+      try { r = new MediaRecorder(st, { mimeType: mp4 }); } catch (e) { st.getTracks().forEach(tr => tr.stop()); return; }
+      copyUsers++;
+      r.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
+      r.onstop = () => {
+        copyUsers--;
+        st.getTracks().forEach(tr => tr.stop());
+        if (!parts.length) return;
+        const v = document.createElement('video');
+        v.muted = true; v.preload = 'metadata';
+        const url = URL.createObjectURL(new Blob(parts, { type: 'video/mp4' }));
+        const done = ok => { mp4Ok = ok; URL.revokeObjectURL(url); v.removeAttribute('src'); };
+        v.onloadedmetadata = () => done(v.videoWidth > 0 && v.videoHeight > 0);
+        v.onerror = () => done(false);
+        v.src = url;
+      };
+      r.start(100);
+      setTimeout(() => { try { r.stop(); } catch (e) {} }, 700);
+    }
+    // The MP4 test runs once, on the first end screen (the player is idle there), not while loading.
+    // Trade-off: the very first clip of a visit is WebM; later clips use MP4 when the test passes.
+    let mp4Tested = false;
+    function start(roundId) {
+      if (!supported()) return;
+      stop();
+      onReady = null;
+      try {
+        if (!stream) stream = recSurface().captureStream(30);
+        if (stream.getAudioTracks().length === 0) { const a = Sound.streamTrack(); if (a) stream.addTrack(a); }
+        const mime = pickMime();
+        const r = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 5000000 } : undefined);
+        const myChunks = [];
+        const myRound = roundId;
+        r.ondataavailable = e => { if (e.data && e.data.size) myChunks.push(e.data); };
+        r.onstop = () => {
+          copyUsers--;
+          if (finishing === myRound) finishing = -1;
+          if (!myChunks.length) { onReady = null; return; }
+          // Plain type without codec details: phones reject 'video/webm;codecs=...' for sharing.
+          const raw = r.mimeType || mime || 'video/webm';
+          clip = new Blob(myChunks, { type: raw.indexOf('mp4') >= 0 ? 'video/mp4' : 'video/webm' });
+          clipRound = myRound;
+          if (onReady) { const f = onReady; onReady = null; f(clip); }
+        };
+        r.start(250);
+        copyUsers++;
+        rec = r; recRound = roundId; startedAt = performance.now();
+      } catch (e) { rec = null; }
+    }
+    function stop() {
+      if (rec && rec.state !== 'inactive') { finishing = recRound; try { rec.stop(); } catch (e) { finishing = -1; } }
+      rec = null;
+    }
+    function tick(st) {
+      if (!mp4Tested && !rec && (st.state === 'stopped' || st.state === 'fell')) { mp4Tested = true; testMp4(); }
+      if (!rec) return;
+      const now = performance.now();
+      if (now - startedAt > MAX_MS) stop();
+      else if (st.state === 'stopped' && now - st.endAt > 1200) stop();
+      else if (st.state === 'fell') stop();
+    }
+    function clipFor(roundId) { return clipRound === roundId ? clip : null; }
+    // True from the round's start until its file is ready, with no gap in between.
+    function recordingFor(roundId) { return (!!rec && recRound === roundId) || finishing === roundId; }
+    // Get this round's clip now: finish the recording early if it is still running.
+    function finish(roundId, cb) {
+      if (clipRound === roundId && clip) { cb(clip); return; }
+      if (!!rec && recRound === roundId) { onReady = cb; stop(); }
+      else if (finishing === roundId) { onReady = cb; }
+    }
+    return { start, stop, tick, clipFor, recordingFor, finish, supported, copyFrame, format: () => pickMime() };
+  })();
+
+  // Inside claude.ai the page saves files through the viewer's downloads capability.
+  let claudeDownloads = null;
+  try {
+    if (window.claude && window.claude.use) {
+      window.claude.use('downloads').then(d => { claudeDownloads = d; }).catch(() => {});
+    }
+  } catch (e) {}
+
+  let pendingShare = false;
+  let shareShownFor = -1, shareShownAt = 0;
+  let toast = { msg: '', until: 0 };
+  const SHARE_BTN = { x: W / 2, y: 702, w: 270, h: 56 };
+  const CHALLENGE_BTN = { x: W / 2, y: 784, w: 360, h: 70 };
+  let pendingChallenge = false;
+  function challengeVisible() { return !IS_PORTAL && roundEnded(); }
+  function shareVisible() {
+    if (IS_PORTAL) return false;
+    const ended = s.state === 'stopped' || s.state === 'fell' || (s.state === 'falling' && s.splashed);
+    return ended && (!!Rec.clipFor(s.id) || Rec.recordingFor(s.id));
+  }
+  function inBtn(b, lx, ly) { return Math.abs(lx - b.x) < b.w / 2 && Math.abs(ly - b.y) < b.h / 2; }
+  function inShareBtn(lx, ly) { return inBtn(SHARE_BTN, lx, ly); }
+  function roundEnded() { return s.state === 'stopped' || s.state === 'fell' || (s.state === 'falling' && s.splashed); }
+
+  // ---- Challenge a friend: a message plus a link that replays this exact cliff ----
+  function challengeUrl() {
+    const p = s.params;
+    const score = s.result === null ? 'x' : String(Math.round(s.result * 10));
+    return `${GAME_URL}?c=${p.si}-${Math.round(p.dist * 1000)}-${Math.round(p.vmax * 1000)}&s=${score}`;
+  }
+  function challengeText() {
+    if (s.daily) {
+      const d = getDaily();
+      const mine = d.best !== null ? fmt(d.best) : 'I fell off 😂';
+      return `Cliff Edge daily ${dayKey()}: ${mine} from the edge. Same cliff for everyone today, can you beat me?`;
+    }
+    if (s.friend && s.friendWin && s.friend.score !== null) return `I beat your ${fmt(s.friend.score)} with ${fmt(s.result)}! Your turn, same cliff:`;
+    if (s.result !== null) return `I stopped ${fmt(s.result)} from the cliff edge! Can you beat me on the same cliff?`;
+    return `I flew off the cliff 😂 Can you stop at the edge? Same cliff:`;
+  }
+  // ---- Share panel for browsers without a share menu (Messenger, Facebook, TikTok... on Android) ----
+  const sheetEl = document.getElementById('sheet');
+  function openSheet(title, body, actions) {
+    document.getElementById('sheet-title').textContent = title;
+    document.getElementById('sheet-text').textContent = body;
+    const box = document.getElementById('sheet-actions');
+    box.textContent = '';
+    actions.forEach(a => {
+      const el = document.createElement(a.href ? 'a' : 'button');
+      el.className = 'sheet-btn' + (a.primary ? ' primary' : '');
+      el.textContent = a.label;
+      if (a.href) { el.href = a.href; if (a.newTab) { el.target = '_blank'; el.rel = 'noopener'; } }
+      else el.type = 'button';
+      if (a.onClick) el.addEventListener('click', () => a.onClick(el));
+      box.appendChild(el);
+    });
+    sheetEl.hidden = false;
+  }
+  function closeSheet() { sheetEl.hidden = true; }
+  document.getElementById('sheet-close').addEventListener('click', closeSheet);
+  sheetEl.addEventListener('click', e => { if (e.target === sheetEl) closeSheet(); });
+  sheetEl.addEventListener('pointerdown', e => e.stopPropagation());
+  window.addEventListener('keydown', e => { if (e.key === 'Escape' && !sheetEl.hidden) closeSheet(); });
+
+  // Copy that also works inside in-app browsers, where the newer clipboard call is often blocked.
+  function copyText(str) {
+    let ok = false;
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = str; ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.opacity = '0'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, str.length);
+      ok = document.execCommand('copy');
+      ta.remove();
+    } catch (e) {}
+    if (!ok) { try { navigator.clipboard.writeText(str); ok = true; } catch (e) {} }
+    return ok;
+  }
+  function copyAction(label, str, primary = true) {
+    return { label, primary, onClick: el => {
+      el.textContent = copyText(str) ? 'Copied! Paste it in the chat' : 'Copy failed. Press and hold the link';
+    } };
+  }
+  function challengeSheet(msg, url) {
+    const full = msg + ' ' + url;
+    openSheet('Challenge a friend',
+      'Send this to a friend. They play the same cliff and try to beat you.',
+      [
+        copyAction('Copy link', full),
+        { label: 'WhatsApp', href: 'https://wa.me/?text=' + encodeURIComponent(full), newTab: true },
+        { label: 'Telegram', href: 'https://t.me/share/url?url=' + encodeURIComponent(url) + '&text=' + encodeURIComponent(msg), newTab: true },
+      ]);
+  }
+  function isAndroid() { return /Android/i.test(navigator.userAgent || ''); }
+  // Android only: a link that hands this page to Chrome (documented Chrome intent link).
+  function chromeIntentUrl() {
+    const u = new URL(GAME_URL);
+    return 'intent://' + u.host + u.pathname + '#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(GAME_URL) + ';end';
+  }
+  function clipSheet() {
+    if (isAndroid()) {
+      openSheet('Share your clip',
+        "This app's browser can't share videos. Open the game in Chrome, play a round, then tap SHARE CLIP.",
+        [
+          { label: 'Open in Chrome', href: chromeIntentUrl(), primary: true },
+          copyAction('Copy game link', GAME_URL, false),
+        ]);
+    } else {
+      openSheet('Share your clip',
+        "This app's browser can't share videos. Tap the ••• or share icon, choose Open in Safari, play a round, then tap SHARE CLIP.",
+        [copyAction('Copy game link', GAME_URL)]);
+    }
+  }
+
+  function doChallenge() {
+    Track.send('challenge', s.daily ? -1 : s.cliff);
+    const url = challengeUrl(), msg = challengeText();
+    if (navigator.share) {
+      navigator.share({ title: 'Cliff Edge', text: msg, url }).catch(err => {
+        if (err && err.name === 'AbortError') return;   // player closed the share menu
+        challengeSheet(msg, url);
+      });
+    } else {
+      challengeSheet(msg, url);
+    }
+  }
+  function showToast(msg, ms = 2600) { toast = { msg, until: performance.now() + ms }; }
+
+  // Must run inside a tap (pointerup) so phones allow the share sheet.
+  const GAME_URL = 'https://waeel1899464.github.io/cliff-edge/';
+  function doShare() {
+    Track.send('share_clip', s.cliff);
+    const round = s;
+    Rec.finish(round.id, blob => shareClip(blob, round));
+  }
+  function shareClip(blob, round) {
+    const s = round;
+    const ext = blob.type.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
+    const label = s.result !== null ? s.result.toFixed(1).replace('.', '_') + 'cm' : 'fall';
+    const file = new File([blob], `cliff-edge-${label}.${ext}`, { type: blob.type });
+    const msg = s.result !== null
+      ? `I stopped ${fmt(s.result)} from the edge! Can you get closer? ${GAME_URL}`
+      : `My car flew off the cliff 😂 Can you stop closer to the edge? ${GAME_URL}`;
+    if (claudeDownloads) {
+      claudeDownloads.save({ filename: file.name, data: blob })
+        .then(() => showToast('Saved! Sharing opens on the public link'))
+        .catch(err => { if (!err || err.code !== 'declined') showToast('Could not save the video'); });
+      return;
+    }
+    // Video only, no text: apps like Messenger keep the text and drop the video when both are sent.
+    // The game link is drawn inside the video instead.
+    const shareFile = () => navigator.share({ files: [file] });
+    let why = 'no-share';
+    if (navigator.share) {
+      let ok = false;
+      if (navigator.canShare) { try { ok = navigator.canShare({ files: [file] }); } catch (e) {} }
+      else ok = true;   // older browsers: no canShare, just try
+      why = ok ? '' : 'no-video-share';
+      if (ok) {
+        shareFile().catch(err => {
+          // AbortError = the player closed the share menu.
+          if (err && err.name === 'AbortError') return;
+          if (err && err.name === 'NotAllowedError') { showToast('Tap SHARE CLIP again'); return; }
+          if (inAppBrowser()) { clipSheet(); return; }
+          saveFile(blob, file.name); explainSave('no-video-share');
+        });
+        return;
+      }
+    }
+    // In-app browsers can't share or save videos: offer the way out to Chrome / Safari.
+    if (inAppBrowser() && window.top === window) { clipSheet(); return; }
+    // Other browsers: save the video file and say why sharing was not possible.
+    saveFile(blob, file.name);
+    explainSave(why);
+  }
+
+  function saveFile(blob, name) {
+    try {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+    } catch (e) {}
+  }
+
+  // Links opened inside TikTok, Instagram, Facebook, WhatsApp etc. run in a built-in browser that cannot share files.
+  function inAppBrowser() {
+    const ua = navigator.userAgent || '';
+    return /FBAN|FBAV|FB_IAB|Instagram|TikTok|musical_ly|Bytedance|Snapchat|Line\/|WhatsApp|Telegram|; wv\)/i.test(ua);
+  }
+
+  function explainSave(why) {
+    if (window.top !== window) showToast('Video saved\nSharing works on the public link');
+    else if (inAppBrowser()) showToast('Video saved\nTo share, open this page in Chrome', 5000);
+    else if (why === 'no-video-share') showToast('Video saved\nThis browser can\'t share videos. Try Chrome', 5000);
+    else showToast('Video saved\nThis browser can\'t share. Try Chrome', 5000);
+  }
+
+  // ---------- Helpers ----------
+  const edgeM = EDGE_X / PPM;
+  const rand = (a, b) => a + Math.random() * (b - a);
+  function frontX() { return s.x + CAR_LEN; }
+
+  function puff(x, y, n, color, spread, up, size, life) {
+    for (let i = 0; i < n; i++) {
+      particles.push({ x, y, vx: rand(-spread, spread), vy: -rand(up * 0.4, up), life: rand(life * 0.6, life), t: 0, r: rand(size * 0.5, size), color, g: 500 });
+    }
+  }
+
+  function spawnDust(n) {
+    for (let i = 0; i < n; i++) {
+      particles.push({
+        x: s.x * PPM + 8 + Math.random() * 6, y: GROUND_Y - 2,
+        vx: -(20 + Math.random() * 40) + s.v * 6, vy: -(15 + Math.random() * 45),
+        life: 0.45 + Math.random() * 0.3, t: 0, r: 2 + Math.random() * 3,
+        color: s.surfNow.dust, g: 80, grow: true,
+      });
+    }
+  }
+
+  // Break the car into pieces that tumble down the cliff.
+  // A missed cliff: lose a heart and retry it; with no hearts left, go back to the checkpoint.
+  function missCliff() {
+    s.missed = true;
+    hearts--;
+    if (hearts <= 0) { cliff = checkpoint; hearts = HEARTS; s.backTo = checkpoint; }
+    s.heartsLeft = hearts;
+    saveProgress();
+  }
+
+  function rememberTry(stopped) {
+    lastTry = { key: s.layoutKey, release: s.releaseFront, stop: stopped ? frontX() : null };
+  }
+
+  // The first fall of a session plays in full; later ones are shorter (less slow motion, quicker
+  // end), so retrying after many falls never feels slow. Tapping to retry works during the fall.
+  let fallsThisSession = 0;
+  const FALL_FULL = { slow: 0.45, end: 0.9 }, FALL_SHORT = { slow: 0.2, end: 0.45 };
+  function startFall() {
+    rememberTry(false);
+    fallsThisSession++;
+    s.fallTiming = fallsThisSession === 1 ? FALL_FULL : FALL_SHORT;
+    if (!s.friend && !s.daily) missCliff();
+    s.state = 'falling';
+    s.endAt = performance.now();
+    s.fallT = 0;
+    const len = CAR_LEN * PPM;
+    const cx = s.x * PPM + len / 2;
+    const bodyY = GROUND_Y - WHEEL_R - CAR_H / 2 - 2;
+    const vx = Math.max(s.v, 1.4) * PPM;
+    s.parts = [
+      cx < EDGE_X + 12
+        // Slow: the body tips forward over the edge before it drops.
+        ? { kind: 'body', x: cx, y: bodyY, vx, vy: 0, rot: s.tilt, vrot: 1.5, r: 12, tipping: true }
+        : { kind: 'body', x: cx, y: bodyY, vx, vy: -60, rot: s.tilt, vrot: 3 + s.v * 0.5, r: 12 },
+      { kind: 'wheel', x: cx - len / 2 + 11, y: GROUND_Y - WHEEL_R, vx: vx + rand(-80, 40), vy: -rand(180, 320), rot: 0, vrot: rand(-14, 14), r: WHEEL_R },
+      { kind: 'wheel', x: cx + len / 2 - 11, y: GROUND_Y - WHEEL_R, vx: vx + rand(20, 140), vy: -rand(220, 380), rot: 0, vrot: rand(-14, 14), r: WHEEL_R },
+    ];
+    s.fallMsg = s.v < 1.5 ? 'SO CLOSE!' : ['NOOOO!', 'BYE BYE!', 'OOPS!', 'SPLASH!'][Math.floor(Math.random() * 4)];
+    puff(EDGE_X, GROUND_Y, 10, s.surface.dust, 90, 160, 4, 0.6);
+    Sound.scream();
+    Sound.pop();
+  }
+
+  function updateFall(dt) {
+    s.fallT += dt;
+    for (const p of s.parts) {
+      if (p.tipping) {
+        p.vx += 250 * dt; p.vrot += 10 * dt;
+        p.x += p.vx * dt; p.rot += p.vrot * dt;
+        p.y += p.vx * dt * Math.sin(Math.max(0, p.rot)) * 0.6;
+        if (p.x > EDGE_X + p.r) { p.tipping = false; p.vy = p.vx * Math.sin(Math.max(0, p.rot)); }
+        continue;
+      }
+      if (p.inWater) {
+        p.vx *= Math.pow(0.2, dt);
+        p.vy += (35 - p.vy) * Math.min(1, dt * 3);   // sink slowly
+        p.vrot *= Math.pow(0.3, dt);
+      } else {
+        p.vy += G_PX * dt;
+      }
+      const prevY = p.y;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vrot * dt;
+
+      // Bounce off the cliff top (wheels that hop backwards)
+      if (!p.inWater && p.kind === 'wheel' && p.x < EDGE_X && prevY + p.r <= GROUND_Y && p.y + p.r > GROUND_Y) {
+        p.y = GROUND_Y - p.r; p.vy = -Math.abs(p.vy) * 0.45; p.vx *= 0.7;
+      }
+      // Bounce off the cliff wall
+      if (!p.inWater && p.y + p.r > GROUND_Y && p.x - p.r < EDGE_X && prevY + p.r > GROUND_Y) {
+        p.x = EDGE_X + p.r; p.vx = Math.abs(p.vx) * 0.5 + 30; p.vrot *= -0.7;
+        puff(EDGE_X, p.y, 5, s.surface.dust, 60, 80, 3, 0.5);
+      }
+      // Hit the sea
+      if (!p.inWater && p.y > WATER_Y) {
+        p.inWater = true;
+        p.vy *= 0.15;
+        const big = p.kind === 'body';
+        puff(p.x, WATER_Y, big ? 26 : 8, '#e8f6ff', big ? 140 : 60, big ? 420 : 220, big ? 6 : 4, 0.9);
+        puff(p.x, WATER_Y, big ? 14 : 4, '#5fa8ff', big ? 110 : 50, big ? 320 : 160, big ? 5 : 3, 0.8);
+        if (big) { shake = 14; s.splashed = true; s.splashAt = s.fallT; Sound.splash(); }
+      }
+    }
+    if (s.splashed && s.fallT - s.splashAt > s.fallTiming.end) s.state = 'fell';
+  }
+
+  // ---------- Update ----------
+  function update(rawDt, now) {
+    if (now === undefined) now = performance.now();
+    // Slow motion for the first moment of a fall: the dramatic part.
+    let dt = rawDt;
+    if (s.state === 'falling' && s.fallT < s.fallTiming.slow) dt = rawDt * 0.3;
+
+    if (s.state === 'holding' || s.state === 'sliding') {
+      // Over the edge? Place the car exactly where it crossed, at its speed then.
+      const over = now >= s.crossAt;
+      const m = motionAt(over ? s.crossAt : s.state === 'sliding' ? Math.min(now, s.stopAt) : now);
+      // A release that arrives late (busy phone) is still applied at its real time; the drawn car
+      // just never steps backwards while it catches up with the exact slide.
+      s.x = s.state === 'sliding' ? Math.max(s.x, s.x0 + m.d) : s.x0 + m.d; s.v = m.v; s.a = m.a;
+      s.surfNow = surfaceAt(travel());
+      if (s.state === 'sliding' && s.v > 0.4 && Math.random() < 0.9) spawnDust(Math.random() < s.v / 6 ? 2 : 1);
+      if (over) {
+        startFall();
+      } else if (s.state === 'sliding' && now >= s.stopAt) {
+        s.v = 0; s.a = 0;
+        s.x = s.x0 + s.plan.stopX;                    // front exactly where the slide ends
+        s.state = 'stopped';
+        s.endAt = performance.now();
+        s.result = s.gap * 100;                       // centimeters, decided at the release moment
+        rememberTry(true);
+        if (s.friend) { s.friendWin = s.friend.score === null || s.result < s.friend.score; if (s.friendWin) s.friend.won = true; }
+        if (best === null || s.result < best) { best = s.result; save('cliff_best', best); s.newBest = true; }
+        if (s.daily) {
+          // The round belongs to the day it was made for; after midnight it no longer changes the new day.
+          const d = loadJSON('cliff_daily') || getDaily();
+          if (d.day === s.dailyDay && (d.best === null || s.result < d.best)) { d.best = s.result; s.newDailyBest = true; saveJSON('cliff_daily', d); }
+        } else if (!s.friend) {
+          if (s.result < s.target) {
+            s.cleared = true;
+            s.grade = Physics.grade(s.result, s.target);
+            if (s.spec.boss) s.worldDone = true;
+            cliff++;
+            if (isCheckpoint(cliff)) { checkpoint = cliff; hearts = HEARTS; s.newCp = true; }
+            if (cliff > bestCliff) { bestCliff = cliff; s.newBestCliff = true; }
+            saveProgress();
+            puff(EDGE_X - 30, GROUND_Y - 40, 30, '#ffd23f', 160, 380, 5, 1.1);
+            puff(EDGE_X - 30, GROUND_Y - 40, 20, '#ff4f7b', 160, 380, 4, 1.1);
+          } else {
+            missCliff();
+          }
+        }
+        if (s.cleared || s.friendWin || s.newDailyBest) Sound.fanfare();
+        if (s.grade === 'GREAT') Sound.great();
+        if (s.worldDone) { Sound.great(); puff(EDGE_X - 60, GROUND_Y - 60, 40, '#7ef9ff', 220, 480, 5, 1.4); puff(EDGE_X - 60, GROUND_Y - 60, 30, '#ffffff', 220, 480, 4, 1.4); }
+        if (s.grade === 'PERFECT') { Sound.perfect(); puff(EDGE_X - 30, GROUND_Y - 40, 18, '#ffffff', 190, 430, 4, 1.3); }
+        else if (s.newBest || s.result < 10) Sound.ding();
+        else Sound.bloop();
+      }
+    } else if (s.state === 'falling' || s.state === 'fell') {
+      updateFall(dt);
+    }
+
+    // Body pitch spring
+    const targetTilt = (s.state === 'holding' || s.state === 'sliding') ? -s.a * 0.012 : 0;
+    s.tiltV += ((targetTilt - s.tilt) * 120 - s.tiltV * 9) * dt;
+    s.tilt += s.tiltV * dt;
+
+    // Character springs: googly pupil lags behind motion, antenna wobbles, body squashes.
+    const moving = s.state === 'holding' || s.state === 'sliding';
+    const ax = moving ? -s.a : 0;
+    const eyeTX = moving ? Math.max(-6, Math.min(6, ax * 0.7 + 2)) : (s.state === 'stopped' ? 3 : 1.5);
+    const eyeTY = s.state === 'stopped' && gapNow() < 1 ? 3 : 0;
+    s.eyeV += ((eyeTX - s.eyeX) * 260 - s.eyeV * 11) * dt; s.eyeX += s.eyeV * dt;
+    s.eyeYV += ((eyeTY - s.eyeY) * 260 - s.eyeYV * 11) * dt; s.eyeY += s.eyeYV * dt;
+    if (s.parts) s.antV += rand(-60, 60) * dt * 10;
+    s.antV += ((Math.max(-0.9, Math.min(0.9, ax * 0.07)) - s.ant) * 90 - s.antV * 3.5) * dt; s.ant += s.antV * dt;
+    const sqT = moving ? Math.max(-0.12, Math.min(0.12, s.a * 0.012)) : 0;
+    s.sqV += ((sqT - s.sq) * 160 - s.sqV * 8) * dt; s.sq += s.sqV * dt;
+
+    // Particles
+    for (const p of particles) {
+      p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt;
+    }
+    particles = particles.filter(p => p.t < p.life);
+    shake *= Math.pow(0.02, rawDt);
+
+    // Camera: zoom toward the edge when close; pull back to show the fall.
+    // Long roads: zoom out just enough that the whole car stays on screen (V2 roads keep zoom 1).
+    const rearPx = s.x * PPM;
+    const zFar = rearPx < 12 ? Math.max(0.45, (CAM_ANCHOR_X - 12) / (CAM_ANCHOR_X - rearPx)) : 1;
+    let zt = zFar, ft = CAM_ANCHOR_X, fyt = GROUND_Y;
+    if (s.parts) {
+      // Follow the falling body down to the splash, zoomed in.
+      const b = s.parts[0];
+      zt = 2;
+      ft = CAM_ANCHOR_X + (b.x - CAM_ANCHOR_X);
+      fyt = Math.min(b.y, WATER_Y - 40);
+    } else if (s.state === 'sliding' || s.state === 'stopped') {
+      const d = gapNow();
+      const near = Math.max(0, Math.min(1, 1 - d / 3));
+      zt = zFar + (3 - zFar) * near * near;
+      const focus = (frontX() * PPM + EDGE_X) / 2;
+      ft = CAM_ANCHOR_X + (focus - CAM_ANCHOR_X) * near;
+    }
+    const ease = 1 - Math.exp(-rawDt * (s.parts ? 6 : 5));
+    cam.z += (zt - cam.z) * ease;
+    cam.fx += (ft - cam.fx) * ease;
+    cam.fy += (fyt - cam.fy) * ease;
+  }
+
+  // ---------- Draw ----------
+  function fmt(cm) {
+    if (cm < 100) return cm.toFixed(1) + ' cm';
+    return (cm / 100).toFixed(2) + ' m';
+  }
+  function fmtTarget(cm) { return cm >= 100 ? (cm / 100) + ' m' : (cm >= 10 ? Math.round(cm) : cm.toFixed(1)) + ' cm'; }
+
+  function text(str, x, y, size, color, weight = 800, align = 'center') {
+    ctx.font = `${weight} ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = size * 0.18;
+    ctx.strokeStyle = 'rgba(10,10,25,0.85)';
+    ctx.lineJoin = 'round';
+    ctx.strokeText(str, x, y);
+    ctx.fillStyle = color;
+    ctx.fillText(str, x, y);
+  }
+
+  function drawWheel(x, y, rot) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    ctx.fillStyle = '#1b1d2b';
+    ctx.beginPath(); ctx.arc(0, 0, WHEEL_R, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#8a8fa8';
+    ctx.fillRect(-1.5, -WHEEL_R + 2, 3, WHEEL_R - 2);
+    ctx.restore();
+  }
+
+  // Body centered on (0,0). mood: 'calm' | 'scared' | 'scream' | 'happy'
+  // The character: a jelly-bean car with one big googly eye and a wobbly antenna.
+  // mood: 'calm' | 'determined' | 'scared' | 'happy' | 'scream'
+  function drawBody(braking, mood) {
+    const len = CAR_LEN * PPM, h = CAR_H;
+    const sq = s.sq || 0;
+    ctx.save();
+    ctx.scale(1 + sq, 1 - sq);
+
+    // antenna (springy) with a glowing ball
+    ctx.save();
+    ctx.translate(-8, -h / 2 - 14);
+    ctx.rotate(s.ant || 0);
+    ctx.strokeStyle = '#2b2d42'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -16); ctx.stroke();
+    ctx.fillStyle = skin.ball;
+    ctx.beginPath(); ctx.arc(0, -18, 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.beginPath(); ctx.arc(-1.5, -19.5, 1.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // roof dome
+    ctx.fillStyle = skin.roof;
+    ctx.beginPath(); ctx.roundRect(-len / 2 + 5, -h / 2 - 15, len * 0.52, 20, [10, 10, 2, 2]); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.beginPath(); ctx.roundRect(-len / 2 + 9, -h / 2 - 12, 6, 9, 3); ctx.fill();
+
+    // body: bean shape with a darker belly
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(-len / 2, -h / 2, len, h, 12);
+    ctx.fillStyle = skin.body; ctx.fill();
+    ctx.clip();
+    ctx.fillStyle = skin.shade;
+    ctx.fillRect(-len / 2, h / 2 - 7, len, 7);
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.fillRect(-len / 2 + 6, -h / 2 + 3, len * 0.35, 3);
+    ctx.restore();
+
+    // brake light
+    ctx.fillStyle = braking ? '#ff1f3d' : '#7a2236';
+    if (braking) { ctx.shadowColor = '#ff1f3d'; ctx.shadowBlur = 14; }
+    ctx.beginPath(); ctx.roundRect(-len / 2 - 2, -h / 2 + 5, 5, 8, 2); ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // cheek
+    ctx.fillStyle = 'rgba(255,150,170,0.75)';
+    ctx.beginPath(); ctx.ellipse(4, 6, 4.5, 3, 0, 0, Math.PI * 2); ctx.fill();
+
+    // eye
+    const ex = 13, ey = -4;
+    const er = mood === 'scream' ? 12.5 : mood === 'scared' ? 11.5 : 10;
+    ctx.lineWidth = 2; ctx.strokeStyle = '#2b2d42';
+    if (mood === 'happy') {
+      ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.arc(ex, ey + 4, 6.5, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+    } else {
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(ex, ey, er, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      let px = s.eyeX || 0, py = s.eyeY || 0;
+      if (mood === 'scream') { px = rand(-4, 4); py = rand(-4, 4); }
+      const pr = mood === 'calm' || mood === 'determined' ? 4.8 : 3.2;
+      const lim = er - pr - 1.5;
+      const m = Math.hypot(px, py); if (m > lim) { px *= lim / m; py *= lim / m; }
+      ctx.fillStyle = '#12141f';
+      ctx.beginPath(); ctx.arc(ex + px, ey + py, pr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(ex + px - 1.4, ey + py - 1.6, 1.3, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // eyebrow
+    ctx.strokeStyle = '#2b2d42'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath();
+    if (mood === 'determined') { ctx.moveTo(5, -17); ctx.lineTo(20, -13); }
+    else if (mood === 'scared' || mood === 'scream') { ctx.moveTo(5, -18); ctx.quadraticCurveTo(12, -24, 21, -19); }
+    else if (mood === 'happy') { ctx.moveTo(6, -14); ctx.quadraticCurveTo(13, -19, 20, -14); }
+    else { ctx.moveTo(6, -16); ctx.lineTo(20, -16); }
+    ctx.stroke();
+
+    // mouth
+    ctx.fillStyle = '#5a0f22'; ctx.strokeStyle = '#5a0f22'; ctx.lineWidth = 2.2;
+    const mx = 17, my = 8;
+    ctx.beginPath();
+    if (mood === 'scream') { ctx.ellipse(mx, my + 1, 4.5, 5.5, 0, 0, Math.PI * 2); ctx.fill(); }
+    else if (mood === 'scared') { ctx.ellipse(mx, my, 2.5, 3, 0, 0, Math.PI * 2); ctx.fill(); }
+    else if (mood === 'happy') { ctx.arc(mx, my - 1, 5, 0.1, Math.PI - 0.1); ctx.closePath(); ctx.fill(); }
+    else if (mood === 'determined') { ctx.moveTo(mx - 4, my); ctx.lineTo(mx + 3, my - 1); ctx.stroke(); }
+    else { ctx.arc(mx, my - 3, 4, 0.3, Math.PI - 0.3); ctx.stroke(); }
+
+    // sweat drop when scared
+    if (mood === 'scared') {
+      ctx.fillStyle = '#7fd4ff';
+      ctx.beginPath();
+      ctx.moveTo(-1, -22); ctx.quadraticCurveTo(3, -16, -1, -14); ctx.quadraticCurveTo(-5, -16, -1, -22);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function carMood() {
+    const d = gapNow();
+    if (s.state === 'holding') return 'determined';
+    if (s.state === 'stopped') return s.result < 10 ? 'happy' : d < 1 ? 'scared' : 'calm';
+    if (s.state === 'sliding') return d < 1.2 ? 'scared' : 'determined';
+    return 'calm';
+  }
+
+  function drawCar() {
+    const len = CAR_LEN * PPM;
+    const cx = s.x * PPM + len / 2;
+    const braking = s.state === 'sliding' && s.v > 0;
+
+    ctx.save();
+    ctx.translate(cx, GROUND_Y - WHEEL_R);
+    drawWheel(-len / 2 + 11, 0, s.x * PPM / WHEEL_R);
+    drawWheel(len / 2 - 11, 0, s.x * PPM / WHEEL_R);
+    ctx.rotate(s.tilt);
+    ctx.translate(0, -CAR_H / 2 - 2);
+    drawBody(braking, carMood());
+    ctx.restore();
+  }
+
+  // Buttons pop in once when the round ends, then stay still.
+  function drawButton(b, label, fill, ink, size, icon) {
+    if (shareShownFor !== s.id) { shareShownFor = s.id; shareShownAt = performance.now(); }
+    const k = Math.min(1, (performance.now() - shareShownAt) / 180);
+    const pop = 0.85 + 0.15 * (1 - Math.pow(1 - k, 3)) + Math.sin(k * Math.PI) * 0.05;
+    ctx.save();
+    ctx.translate(b.x, b.y); ctx.scale(pop, pop);
+    ctx.fillStyle = 'rgba(10,10,25,0.45)';
+    ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2 + 5, b.w, b.h, b.h / 2); ctx.fill();
+    ctx.fillStyle = fill;
+    ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
+    ctx.font = `900 ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(label).width;
+    const ix = -tw / 2 - 8;
+    ctx.fillStyle = ink;
+    if (icon === 'play') {
+      ctx.beginPath(); ctx.moveTo(ix - 16, -10); ctx.lineTo(ix - 16, 10); ctx.lineTo(ix, 0); ctx.closePath(); ctx.fill();
+    } else if (icon === 'flag') {
+      ctx.fillRect(ix - 16, -13, 3, 26);
+      ctx.beginPath(); ctx.moveTo(ix - 13, -13); ctx.lineTo(ix + 3, -7); ctx.lineTo(ix - 13, -1); ctx.closePath(); ctx.fill();
+    }
+    ctx.fillText(label, 12, 1);
+    ctx.restore();
+  }
+  function drawShareBtn() { drawButton(SHARE_BTN, 'SHARE CLIP', '#ffffff', '#12141f', 22, 'play'); }
+  function drawChallengeBtn() { drawButton(CHALLENGE_BTN, 'CHALLENGE A FRIEND', '#ffd23f', '#12141f', 26, 'flag'); }
+
+  // Hearts row; `lost` also shows the spent hearts as empty outlines.
+  function drawHearts(cx, cy, n, lost) {
+    const total = HEARTS, gap = 40, x0 = cx - (total - 1) * gap / 2;
+    for (let i = 0; i < total; i++) {
+      const full = i < n;
+      ctx.save(); ctx.translate(x0 + i * gap, cy + 2); ctx.scale(1.6, 1.6);
+      ctx.beginPath();
+      ctx.moveTo(0, 6);
+      ctx.bezierCurveTo(-12, -2, -8, -12, 0, -6);
+      ctx.bezierCurveTo(8, -12, 12, -2, 0, 6);
+      ctx.closePath();
+      ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(10,10,25,0.75)'; ctx.stroke();
+      ctx.fillStyle = full ? '#ff4f7b' : 'rgba(255,255,255,0.18)';
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Bottom line on end screens.
+  function endHint(runText, friendText) {
+    if (s.friend) return friendText;
+    if (s.daily) {
+      const left = dailyLeft();
+      return left > 0 ? `TAP TO TRY AGAIN · ${left} LEFT` : `NEXT DAILY IN ${nextDailyIn()}`;
+    }
+    return runText;
+  }
+
+  // "DAILY" pill on the home screen (top right, next to the sound button).
+  const DAILY_PILL = { x: W - 150, y: 50, w: 132, h: 42 };
+  function pillVisible() { return s.state === 'ready' && !s.friend; }
+  function toggleDaily() {
+    if (s.daily) { mode = 'run'; newRound(); return; }
+    if (dailyLeft() > 0) { mode = 'daily'; newRound(); }
+    else showToast('Daily done for today\nNext one in ' + nextDailyIn(), 3000);
+  }
+  function drawDailyPill() {
+    const b = DAILY_PILL, streak = getStreak();
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    ctx.fillStyle = s.daily ? 'rgba(255,255,255,0.9)' : 'rgba(10,10,25,0.4)';
+    ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
+    ctx.font = '900 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = s.daily ? '#12141f' : '#ffffff';
+    const label = s.daily ? '✕ EXIT DAILY' : (streak > 0 ? `DAILY 🔥${streak}` : 'DAILY');
+    ctx.fillText(label, 0, 1);
+    // red dot: today's daily not played yet
+    if (!s.daily && getDaily().tries === 0) {
+      ctx.fillStyle = '#ff3355';
+      ctx.beginPath(); ctx.arc(b.w / 2 - 6, -b.h / 2 + 5, 6, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Ruler on the cliff top, plus the ghost of the previous try on this same cliff.
+  function drawAssist() {
+    const top = GROUND_Y;
+    ctx.save();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    // meter marks
+    for (let m = 1; m <= 5; m++) {
+      const x = EDGE_X - m * PPM;
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillRect(x - 1, top, 2, 12);
+      ctx.font = '800 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.fillText(m + 'm', x, top + 26);
+    }
+    // fine marks near the edge (readable when the camera zooms in)
+    [[0.5, '50'], [0.2, '20'], [0.1, '10']].forEach(([m, label]) => {
+      const x = EDGE_X - m * PPM;
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.fillRect(x - 0.5, top, 1, 6);
+      if (cam.z > 1.6) {
+        ctx.font = '800 5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.fillText(label, x, top + 11);
+      }
+    });
+    // ghost of the previous try on this cliff
+    if (lastTry && lastTry.key === s.layoutKey && s.state !== 'stopped' && !s.parts) {
+      if (lastTry.release !== null) {
+        const x = lastTry.release * PPM;
+        ctx.strokeStyle = 'rgba(255,210,63,0.95)'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(x, top - 46); ctx.lineTo(x, top); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.fillStyle = '#ffd23f';
+        ctx.fillText('LET GO', x, top - 54);
+      }
+      if (lastTry.stop !== null) {
+        const len = CAR_LEN * PPM, x = lastTry.stop * PPM - len;
+        ctx.fillStyle = 'rgba(255,255,255,0.28)';
+        ctx.beginPath(); ctx.roundRect(x, top - WHEEL_R * 2 - CAR_H - 2, len, CAR_H + WHEEL_R * 2 + 2, 10); ctx.fill();
+        ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillText('LAST', x + len / 2, top - WHEEL_R * 2 - CAR_H - 12);
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawMuteIcon() {
+    ctx.save();
+    ctx.translate(MUTE_X, MUTE_Y);
+    ctx.fillStyle = 'rgba(10,10,25,0.35)';
+    ctx.beginPath(); ctx.arc(0, 0, 22, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-10, -4); ctx.lineTo(-5, -4); ctx.lineTo(1, -10); ctx.lineTo(1, 10); ctx.lineTo(-5, 4); ctx.lineTo(-10, 4);
+    ctx.closePath(); ctx.fill();
+    if (Sound.isMuted()) {
+      ctx.beginPath(); ctx.moveTo(5, -5); ctx.lineTo(13, 5); ctx.moveTo(13, -5); ctx.lineTo(5, 5); ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.arc(3, 0, 6, -0.9, 0.9); ctx.stroke();
+      ctx.beginPath(); ctx.arc(3, 0, 11, -0.9, 0.9); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawParts() {
+    for (const p of s.parts) {
+      if (p.kind === 'wheel') { drawWheel(p.x, p.y, p.rot); continue; }
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      drawBody(false, 'scream');
+      ctx.restore();
+    }
+  }
+
+  // Zones: the sky changes every 5 cliffs (at each checkpoint), then the cycle repeats.
+  // Only colors and a few dots: no images, the ground and the text stay exactly as readable.
+  const ZONES = [
+    { name: 'SUNSET', sky: ['#2a1f5c', '#ff7a59', '#ffb36b'], sea: 'rgba(31,61,122,0.92)', page: ['#2a1f5c', '#ff7a59', '#ffb36b', '#1f3d7a', '#1a3468'] },
+    { name: 'DUSK',   sky: ['#1d1442', '#a8467a', '#f08a6a'], sea: 'rgba(28,46,104,0.93)', page: ['#1d1442', '#a8467a', '#f08a6a', '#1c2e68', '#17285a'] },
+    { name: 'NIGHT',  sky: ['#070a1f', '#1b2350', '#38407a'], sea: 'rgba(14,26,66,0.94)',  page: ['#070a1f', '#1b2350', '#38407a', '#0e1a42', '#0b1536'], stars: true },
+    { name: 'DAWN',   sky: ['#3d5fa8', '#e39ab8', '#ffd2a1'], sea: 'rgba(36,74,138,0.92)', page: ['#3d5fa8', '#e39ab8', '#ffd2a1', '#244a8a', '#1f4078'] },
+  ];
+  // V3 worlds: each world has its own sky, backdrop and sea. Only shapes and colors (no images).
+  const WORLD_LOOKS = [
+    { name: 'GREEN HILLS', sky: ['#2a6fc4', '#6cb6ee', '#c4e8ff'], sea: 'rgba(30,96,168,0.92)', foam: 'rgba(255,255,255,0.35)', bg: 'hills',
+      far: '#7fbf7a', near: '#4f9d58', page: ['#2a6fc4', '#6cb6ee', '#c4e8ff', '#1e60a8', '#1a5494'] },
+    { name: 'DESERT', sky: ['#d9672e', '#f5a35a', '#ffd9a0'], sea: 'rgba(38,112,150,0.92)', foam: 'rgba(255,255,255,0.35)', bg: 'dunes',
+      far: '#e9b46a', near: '#d39445', page: ['#d9672e', '#f5a35a', '#ffd9a0', '#267096', '#205f80'] },
+    { name: 'SNOW MOUNTAIN', sky: ['#4f6fa8', '#93b2de', '#e2ecf8'], sea: 'rgba(36,74,124,0.93)', foam: 'rgba(255,255,255,0.45)', bg: 'peaks',
+      far: '#9fb3d4', near: '#7d93ba', page: ['#4f6fa8', '#93b2de', '#e2ecf8', '#244a7c', '#1f406c'] },
+    { name: 'MOON', sky: ['#03040a', '#0b0e22', '#1a1e3a'], sea: 'rgba(36,38,56,0.97)', foam: 'rgba(200,205,225,0.3)', bg: 'moon', stars: true,
+      far: '#3a3d55', near: '#2a2c40', page: ['#03040a', '#0b0e22', '#1a1e3a', '#24263a', '#1c1e2e'] },
+    { name: 'VOLCANO', sky: ['#1c0a10', '#5e1a1a', '#b9421e'], sea: 'rgba(255,96,24,0.95)', foam: 'rgba(255,220,90,0.8)', bg: 'volcano',
+      far: '#3a1716', near: '#24100f', page: ['#1c0a10', '#5e1a1a', '#b9421e', '#ff6018', '#e04f12'] },
+  ];
+  // Story mode uses the world's look; the daily and friend cliffs keep the original sunset.
+  function zoneOf(st) { return st.daily || st.friend ? ZONES[0] : WORLD_LOOKS[(st.world || 1) - 1]; }
+  // Far backdrop behind the cliff and the sea (screen space, does not move with the camera).
+  function drawBackdrop(Z) {
+    const base = WATER_Y;
+    const ridge = (amp, f, ph, top, col) => {
+      ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(0, base);
+      for (let x = 0; x <= W; x += 12) ctx.lineTo(x, top - amp * (0.5 + 0.5 * Math.sin(x * f + ph)) - amp * 0.4 * Math.sin(x * f * 2.3 + ph * 2));
+      ctx.lineTo(W, base); ctx.closePath(); ctx.fill();
+    };
+    if (Z.bg === 'hills') { ridge(60, 0.012, 1, 700, Z.far); ridge(40, 0.019, 4, 750, Z.near); }
+    else if (Z.bg === 'dunes') { ridge(45, 0.008, 2, 720, Z.far); ridge(30, 0.013, 5, 765, Z.near); }
+    else if (Z.bg === 'peaks') {
+      [[60, 690, 120], [210, 640, 150], [380, 670, 130], [500, 700, 110]].forEach(([x, top, w]) => {
+        ctx.fillStyle = Z.far; ctx.beginPath(); ctx.moveTo(x - w, base); ctx.lineTo(x, top); ctx.lineTo(x + w, base); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#f4f8ff'; ctx.beginPath(); ctx.moveTo(x - w * 0.28, top + (base - top) * 0.28); ctx.lineTo(x, top);
+        ctx.lineTo(x + w * 0.28, top + (base - top) * 0.28); ctx.lineTo(x + w * 0.1, top + (base - top) * 0.22); ctx.lineTo(x - w * 0.08, top + (base - top) * 0.3); ctx.closePath(); ctx.fill();
+      });
+      ridge(25, 0.02, 3, 780, Z.near);
+    } else if (Z.bg === 'volcano') {
+      ctx.fillStyle = Z.far; ctx.beginPath(); ctx.moveTo(220, base); ctx.lineTo(360, 600); ctx.lineTo(420, 600); ctx.lineTo(560, base); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(255,140,40,0.85)'; ctx.fillRect(362, 596, 56, 6);
+      ctx.fillStyle = 'rgba(60,30,30,0.5)';
+      for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(390 + i * 18, 560 - i * 34, 16 + i * 7, 0, Math.PI * 2); ctx.fill(); }
+      ridge(28, 0.017, 2, 775, Z.near);
+    } else if (Z.bg === 'moon') {
+      ctx.fillStyle = '#3d7bd9'; ctx.beginPath(); ctx.arc(430, 170, 44, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#52b06a'; ctx.beginPath(); ctx.arc(416, 160, 16, 0, Math.PI * 2); ctx.arc(446, 186, 12, 0, Math.PI * 2); ctx.fill();
+      ridge(22, 0.015, 1, 770, Z.far);
+    }
+  }
+  const STARS = Array.from({ length: 46 }, (_, i) => [(i * 137.5) % W, 20 + ((i * 89.3) % (H * 0.5)), i % 5 === 0 ? 3 : 2]);
+  let lastZone = ZONES[0];
+  // Side areas on wide screens follow the zone too (same layout as the CSS background).
+  function setPageSky(Z) {
+    const c = Z.page;
+    try {
+      document.body.style.backgroundImage = `linear-gradient(rgba(10, 10, 25, 0.38), rgba(10, 10, 25, 0.38)), linear-gradient(180deg, ${c[0]} 0%, ${c[1]} 60%, ${c[2]} 84.2%, ${c[3]} 84.4%, ${c[4]} 100%)`;
+    } catch (e) {}
+  }
+
+  // Story cliffs are named by world: cliff 17 is "CLIFF 2-7".
+  function cliffLabel(n) { const w = Math.floor((n - 1) / 10) + 1, k = (n - 1) % 10 + 1; return `CLIFF ${w}-${k}`; }
+
+  function draw() {
+    // Start every frame from a clean canvas state, so nothing left over from a previous
+    // frame (clip, transparency, transform) can hide the drawing.
+    if (ctx.reset) ctx.reset();
+    else { ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowBlur = 0; }
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    if (shake > 0.3) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+
+    // sky (screen space), changes every 5 cliffs
+    const Z = zoneOf(s);
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, Z.sky[0]);
+    g.addColorStop(0.6, Z.sky[1]);
+    g.addColorStop(1, Z.sky[2]);
+    ctx.fillStyle = g;
+    ctx.fillRect(-20, -20, W + 40, H + 40);
+    if (Z.stars) {
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      for (const st of STARS) ctx.fillRect(st[0], st[1], st[2], st[2]);
+      ctx.fillStyle = '#fff6d8';
+      ctx.beginPath(); ctx.arc(110, 150, 26, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = Z.sky[0];
+      ctx.beginPath(); ctx.arc(122, 142, 22, 0, Math.PI * 2); ctx.fill();
+    }
+    if (Z.bg) drawBackdrop(Z);
+    if (Z !== lastZone) { lastZone = Z; setPageSky(Z); }
+
+    // world (camera space)
+    ctx.save();
+    ctx.translate(CAM_ANCHOR_X, GROUND_Y);
+    ctx.scale(cam.z, cam.z);
+    ctx.translate(-cam.fx, -cam.fy);
+
+    ctx.fillStyle = s.surface.side;
+    ctx.fillRect(-2000, GROUND_Y + 14, EDGE_X + 2000, 3000);
+    // A downhill road is drawn at its real angle, pivoting at the edge (physics uses the same slope).
+    const ang = Math.atan(s.spec.slope || 0);
+    if (ang) {
+      const L = 2600, dx = -L * Math.cos(ang), dy = -L * Math.sin(ang);
+      ctx.beginPath(); ctx.moveTo(EDGE_X, GROUND_Y + 13); ctx.lineTo(EDGE_X + dx, GROUND_Y + dy + 13); ctx.lineTo(EDGE_X + dx, GROUND_Y + 40); ctx.closePath(); ctx.fill();
+    }
+    ctx.save();
+    ctx.translate(EDGE_X, GROUND_Y); ctx.rotate(ang); ctx.translate(-EDGE_X, GROUND_Y * -1);
+    // the road top, one colour per piece of ground (ground can change along the road)
+    for (const g of Physics.segments(s.spec)) {
+      const x0 = g.x0 === 0 ? -2000 : EDGE_X - (s.dist - g.x0) * PPM, x1 = Math.min(EDGE_X, EDGE_X - (s.dist - g.x1) * PPM);
+      ctx.fillStyle = SURFACES[g.si].top;
+      ctx.fillRect(x0, GROUND_Y, x1 - x0, 14);
+    }
+
+    // edge flag (points out over the drop)
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(EDGE_X - 3, GROUND_Y - 30, 3, 30);
+    ctx.fillStyle = '#ff3355';
+    ctx.beginPath();
+    ctx.moveTo(EDGE_X - 3, GROUND_Y - 30);
+    ctx.lineTo(EDGE_X + 19, GROUND_Y - 24);
+    ctx.lineTo(EDGE_X - 3, GROUND_Y - 18);
+    ctx.fill();
+
+    // Ground type, written on the cliff face instead of the top of the screen.
+    ctx.font = '800 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    if (s.state === 'ready' || s.state === 'holding') ctx.fillText(s.surface.name, EDGE_X - 16, GROUND_Y + (ASSIST ? 62 : 40));
+
+    if (ASSIST) drawAssist();
+    if (!s.parts) drawCar();
+    ctx.restore();
+    if (s.parts) drawParts();
+
+    // sea drawn over the pieces so sinking parts look underwater
+    ctx.fillStyle = Z.sea;
+    ctx.fillRect(-2000, WATER_Y, 6000, 3000);
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillRect(-2000, WATER_Y, 6000, 3);
+
+    for (const p of particles) {
+      ctx.globalAlpha = 0.8 * (1 - p.t / p.life);
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.grow ? p.r * (1 + p.t * 2) : p.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // HUD (screen space)
+    text('BEST ' + cliffLabel(bestCliff).replace('CLIFF ', ''), 26, 50, 22, '#ffffff', 800, 'left');
+
+    drawMuteIcon();
+    if (pillVisible()) drawDailyPill();
+
+    // Game link on the end screens; every recorded clip ends on one, so clips carry it. Web build only.
+    if (!IS_PORTAL && roundEnded()) {
+    ctx.font = '700 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(10,10,25,0.45)';
+    ctx.beginPath(); ctx.roundRect(W / 2 - 168, 930, 336, 26, 13); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText('▶ waeel1899464.github.io/cliff-edge', W / 2, 944);
+    }
+
+    // Top banner: friend challenge, daily challenge, or the endless run
+    if (s.daily) {
+      const d = getDaily(), left = DAILY_TRIES - d.tries, streak = getStreak();
+      text('DAILY CHALLENGE', W / 2, 150, 20, '#ffd23f', 800);
+      if (s.state === 'ready') {
+        text(d.best !== null ? 'BEST TODAY ' + fmt(d.best) : 'ONE CLIFF FOR EVERYONE', W / 2, 194, d.best !== null ? 40 : 30, '#ffffff', 900);
+        text(`${left} ${left === 1 ? 'TRY' : 'TRIES'} LEFT TODAY`, W / 2, 238, 18, '#fff3c4', 700);
+      } else if (roundEnded()) {
+        text(streak > 0 ? `🔥 ${streak} DAY STREAK` : `TRY ${s.dailyTry}/${DAILY_TRIES}`, W / 2, 194, 26, '#ffffff', 900);
+      }
+    } else if (s.friend) {
+      text(`FRIEND'S CHALLENGE · TRY ${s.friendTry}/${FRIEND_TRIES}`, W / 2, 150, 20, '#ffd23f', 800);
+      text(s.friend.score === null ? 'YOUR FRIEND FELL OFF' : 'BEAT ' + fmt(s.friend.score), W / 2, 192, 38, '#ffffff', 900);
+      text('Same cliff, same speed', W / 2, 232, 20, '#fff3c4', 600);
+    } else if (s.cleared) {
+      if (s.worldDone) {
+        text(`WORLD ${s.world} COMPLETE!`, W / 2, 150, 36, '#7ef9ff', 900);
+        text(`Next: ${Physics.WORLDS[Math.min(4, s.world)].name} · hearts refilled`, W / 2, 196, 22, '#fff3c4', 800);
+      } else {
+        text(s.newCp ? 'CHECKPOINT SAVED!' : 'CLIFF CLEARED!', W / 2, 150, 34, '#ffd23f', 900);
+        text(s.newCp ? `Hearts refilled · next: ${cliffLabel(cliff)}` : `Next: ${cliffLabel(cliff)}`, W / 2, 196, 22, '#fff3c4', 800);
+      }
+    } else if (s.missed && (s.state === 'stopped' || s.state === 'fell' || s.splashed)) {
+      if (s.backTo) {
+        text('NO HEARTS LEFT', W / 2, 150, 34, '#ff8fa8', 900);
+        text(`Back to checkpoint · cliff ${s.backTo}`, W / 2, 196, 22, '#fff3c4', 800);
+      } else {
+        text('MISSED!', W / 2, 150, 34, '#ff8fa8', 900);
+        drawHearts(W / 2, 198, s.heartsLeft, true);
+      }
+    } else {
+      text(Physics.WORLDS[s.world - 1].name, W / 2, 116, 16, 'rgba(255,255,255,0.85)', 800);
+      if (s.spec.boss) text(`BOSS · ${cliffLabel(s.cliff).replace('CLIFF ', '')}`, W / 2, 150, 22, '#ff8a5c', 900);
+      else text(cliffLabel(s.cliff), W / 2, 150, 20, '#ffd23f', 800);
+      text('UNDER ' + fmtTarget(s.target), W / 2, 194, 44, '#ffffff', 900);
+      drawHearts(W / 2, 242, hearts, false);
+    }
+
+    if (s.state === 'ready') {
+      // Teach the controls only in the first rounds; after that the screen stays clean.
+      if (roundsPlayed < 3) {
+        text(FINE_POINTER ? 'HOLD SPACE OR CLICK' : 'HOLD TO DRIVE', W / 2, 380, 40, '#ffffff');
+        text('Let go to stop at the edge', W / 2, 426, 22, '#fff3c4', 600);
+      }
+    } else if (s.state === 'sliding' || (ASSIST && s.state === 'holding')) {
+      text(fmt(Math.max(0, gapNow() * 100)), W / 2, 340, 52, 'rgba(255,255,255,0.9)');
+    } else if (s.state === 'stopped') {
+      text(fmt(s.result), W / 2, 300, 76, '#ffffff');
+      if (s.friend) text(s.friendWin ? 'YOU BEAT YOUR FRIEND!' : 'YOUR FRIEND WINS', W / 2, 358, 30, s.friendWin ? '#ffd23f' : '#fff3c4', 900);
+      else if (s.daily) {
+        // After midnight (UTC) the round still belongs to its own day, so today's best is not shown for it.
+        const db = s.dailyDay === dayKey() ? getDaily().best : null;
+        text(s.newDailyBest ? (s.dailyDay === dayKey() ? 'NEW BEST TODAY!' : 'NEW BEST!') : db !== null ? 'BEST TODAY ' + fmt(db) : 'from the edge', W / 2, 358, 28, s.newDailyBest ? '#ffd23f' : '#fff3c4', 800);
+      }
+      else if (s.grade) {
+        // Stop quality on a cleared cliff: PERFECT < GREAT < target, so PERFECT is always also GREAT.
+        const G = { PERFECT: ['PERFECT!', 36, '#ffd23f', 900], GREAT: ['GREAT!', 32, '#ffe27a', 900], GOOD: ['GOOD', 28, '#fff3c4', 800] }[s.grade];
+        text(G[0], W / 2, 358, G[1], G[2], G[3]);
+        if (s.newBest) text('NEW BEST STOP', W / 2, 394, 18, '#ffd23f', 800);
+      }
+      else text(s.newBest ? 'NEW BEST STOP!' : 'from the edge', W / 2, 358, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
+      text(endHint(s.cleared ? `TAP FOR ${cliffLabel(cliff)}` : `TAP TO RETRY ${cliffLabel(cliff)}`, 'TAP TO PLAY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
+    } else if (s.state === 'falling' || s.state === 'fell') {
+      text(s.fallMsg, W / 2, 340, 64, '#ffffff');
+      if (s.friend) text(s.friend.score === null ? 'YOU BOTH FELL!' : 'YOUR FRIEND WINS', W / 2, 400, 28, '#fff3c4', 900);
+      text(endHint(`TAP TO RETRY ${cliffLabel(cliff)}`, 'TAP TO TRY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
+    }
+    if (shareVisible()) drawShareBtn();
+    if (challengeVisible()) drawChallengeBtn();
+    if (performance.now() < toast.until) {
+      ctx.fillStyle = 'rgba(10,10,25,0.8)';
+      const lines = toast.msg.split('\n');
+      const th = 26 + lines.length * 28;
+      ctx.beginPath(); ctx.roundRect(W / 2 - 255, 600 - th / 2, 510, th, 22); ctx.fill();
+      lines.forEach((ln, i) => text(ln, W / 2, 600 - (lines.length - 1) * 14 + i * 28, i === 0 ? 22 : 18, i === 0 ? '#ffd23f' : '#ffffff', 700));
+    }
+  }
+
+  // ---------- Loop ----------
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    update(dt, now);
+    Sound.update(s);
+    Rec.tick(s);
+    draw();
+    Rec.copyFrame();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  window.__cliff = () => s;   // used only for automated testing
+  window.__physics = Physics;   // used only for automated testing and tools/sim
+  window.__shareVisible = () => shareVisible();
+})();
+</script>
+
+</body>
+</html>

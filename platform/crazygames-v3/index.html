@@ -375,8 +375,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       { name: 'GREEN HILLS', twist: 'Road, ice and mud' },
       { name: 'DESERT', twist: 'Wind and sand' },
       { name: 'SNOW MOUNTAIN', twist: 'Ground changes, fog' },
-      { name: 'VOLCANO', twist: 'Crumbling edge' },
       { name: 'MOON', twist: 'Low gravity' },
+      { name: 'VOLCANO', twist: 'Crumbling edge' },
     ];
     const CLIFFS = [
       // World 1: Green Hills — V2's first 9 cliffs, then the boss: a long downhill slope.
@@ -1750,10 +1750,10 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       far: '#e9b46a', near: '#d39445', page: ['#d9672e', '#f5a35a', '#ffd9a0', '#267096', '#205f80'] },
     { name: 'SNOW MOUNTAIN', sky: ['#4f6fa8', '#93b2de', '#e2ecf8'], sea: 'rgba(36,74,124,0.93)', foam: 'rgba(255,255,255,0.45)', bg: 'peaks',
       far: '#9fb3d4', near: '#7d93ba', page: ['#4f6fa8', '#93b2de', '#e2ecf8', '#244a7c', '#1f406c'] },
-    { name: 'VOLCANO', sky: ['#1c0a10', '#5e1a1a', '#b9421e'], sea: 'rgba(255,96,24,0.95)', foam: 'rgba(255,220,90,0.8)', bg: 'volcano',
-      far: '#3a1716', near: '#24100f', page: ['#1c0a10', '#5e1a1a', '#b9421e', '#ff6018', '#e04f12'] },
     { name: 'MOON', sky: ['#03040a', '#0b0e22', '#1a1e3a'], sea: 'rgba(36,38,56,0.97)', foam: 'rgba(200,205,225,0.3)', bg: 'moon', stars: true,
       far: '#3a3d55', near: '#2a2c40', page: ['#03040a', '#0b0e22', '#1a1e3a', '#24263a', '#1c1e2e'] },
+    { name: 'VOLCANO', sky: ['#1c0a10', '#5e1a1a', '#b9421e'], sea: 'rgba(255,96,24,0.95)', foam: 'rgba(255,220,90,0.8)', bg: 'volcano',
+      far: '#3a1716', near: '#24100f', page: ['#1c0a10', '#5e1a1a', '#b9421e', '#ff6018', '#e04f12'] },
   ];
   // Story mode uses the world's look; the daily and friend cliffs keep the original sunset.
   function zoneOf(st) { return st.daily || st.friend ? ZONES[0] : WORLD_LOOKS[(st.world || 1) - 1]; }
