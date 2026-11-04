@@ -12,8 +12,20 @@ TARGET="${1:-web}"
 # do not allow (external links, clip sharing, friend challenge links, event tracking).
 # The web version on GitHub Pages is NOT touched by this target.
 # ---------------------------------------------------------------------------
-if [ "$TARGET" = "crazygames" ]; then
-  mkdir -p platform/crazygames
+# Experimental v2 builds (feature/fair-precision): same platform page, plus their own storage
+# prefix (cg2_) so they never read or change the saves of the web game or of the first preview.
+#   ./build.sh crazygames-v2 -> platform/crazygames-v2/index.html
+#   ./build.sh preview-v2    -> docs/crazygames-preview-v2/index.html (identical file)
+if [ "$TARGET" = "crazygames-v2" ] || [ "$TARGET" = "preview-v2" ]; then
+  if [ "$TARGET" = "crazygames-v2" ]; then OUT=platform/crazygames-v2; else OUT=docs/crazygames-preview-v2; fi
+  mkdir -p "$OUT"
+  "$0" crazygames-stdout | sed "s#<script>window.CLIFF_BUILD = 'crazygames';</script>#<script>window.CLIFF_BUILD = 'crazygames'; window.CLIFF_STORE_PREFIX = 'cg2_';</script>#" > "$OUT/index.html"
+  echo "built $OUT/index.html"
+  exit 0
+fi
+
+if [ "$TARGET" = "crazygames" ] || [ "$TARGET" = "crazygames-stdout" ]; then
+  [ "$TARGET" = "crazygames" ] && mkdir -p platform/crazygames
   {
   cat <<'HEAD'
 <!doctype html>
@@ -35,12 +47,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 HEAD
   cat index.html
   printf '\n</body>\n</html>\n'
-  } > platform/crazygames/index.html
-  echo "built platform/crazygames/index.html"
+  } > "$( [ "$TARGET" = "crazygames" ] && echo platform/crazygames/index.html || echo /dev/stdout )"
+  [ "$TARGET" = "crazygames" ] && echo "built platform/crazygames/index.html"
   exit 0
 fi
 
-if [ "$TARGET" != "web" ]; then echo "unknown target: $TARGET (use: web | crazygames)"; exit 1; fi
+if [ "$TARGET" != "web" ]; then echo "unknown target: $TARGET (use: web | crazygames | crazygames-v2 | preview-v2)"; exit 1; fi
 
 # ---------------------------------------------------------------------------
 # Web build (GitHub Pages): ./build.sh  or  ./build.sh web  -> docs/index.html

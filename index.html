@@ -89,16 +89,168 @@
   const WATER_Y = H - 150;           // sea surface
   const CAR_LEN = 1.6;               // meters
   const CAR_H = 26, WHEEL_R = 8;     // pixels
-  const ACCEL = 7;                   // m/s² while holding
   const G_PX = 900;                  // gravity in px/s² for the fall
   const CAM_ANCHOR_X = W * 0.55;     // where the camera focus sits on screen
 
-  // Braking: deceleration = base + drag * speed (smooth ease-out).
-  const SURFACES = [
-    { name: 'ROAD', base: 2.0, drag: 0.9,  top: '#6a6e84', side: '#3d4052', dust: '#c9cbd6' },
-    { name: 'ICE',  base: 0.9, drag: 0.45, top: '#d4f1ff', side: '#7cc4e6', dust: '#ffffff' },
-    { name: 'MUD',  base: 4.0, drag: 1.8,  top: '#8a5a33', side: '#5e3b1f', dust: '#a8774a' },
-  ];
+  /* PHYSICS-BEGIN
+     Pure functions: no DOM, no game state. tools/sim reads this exact block from index.html,
+     so the simulator and the game always share the same physics.
+
+     Motion is computed with closed-form equations, not frame steps, so a position or a stop
+     depends only on input times, never on the screen's frame rate (30/60/120/144 Hz all equal).
+       Holding (from rest, accel a up to vmax):  v = min(vmax, a*t)
+       Sliding (dv/dt = -(c + k*v)):             v(t) = (v0 + c/k) e^(-k t) - c/k
+                                                 x(t) = (v0 + c/k)(1 - e^(-k t))/k - (c/k) t
+                                                 stop time  = ln(1 + k v0 / c) / k
+                                                 stop dist  = v0/k - (c/k^2) ln(1 + k v0 / c)  */
+  const Physics = (() => {
+    const ACCEL = 7;                                  // m/s² while holding (unchanged)
+    // Braking: deceleration = base + drag * speed (unchanged values)
+    const SURFACES = [
+      { name: 'ROAD', base: 2.0, drag: 0.9 },
+      { name: 'ICE',  base: 0.9, drag: 0.45 },
+      { name: 'MUD',  base: 4.0, drag: 1.8 },
+    ];
+
+    // ---- holding from rest ----
+    function hold(tau, vmax) {
+      if (!(tau > 0)) return { d: 0, v: 0, a: ACCEL };
+      const tv = vmax / ACCEL;
+      if (tau < tv) return { d: 0.5 * ACCEL * tau * tau, v: ACCEL * tau, a: ACCEL };
+      return { d: 0.5 * vmax * tv + vmax * (tau - tv), v: vmax, a: 0 };
+    }
+    // time (s) at which the holding car has moved `dist` meters
+    function holdTimeFor(dist, vmax) {
+      if (!(dist > 0)) return 0;
+      const tv = vmax / ACCEL, dv = 0.5 * vmax * tv;
+      return dist <= dv ? Math.sqrt(2 * dist / ACCEL) : tv + (dist - dv) / vmax;
+    }
+
+    // ---- sliding ----
+    function stopTime(v0, c, k) { return v0 > 0 ? Math.log(1 + k * v0 / c) / k : 0; }
+    function stopDist(v0, c, k) { return v0 > 0 ? v0 / k - (c / (k * k)) * Math.log(1 + k * v0 / c) : 0; }
+    function slide(sig, v0, c, k) {
+      const ts = stopTime(v0, c, k);
+      if (!(sig > 0)) return { d: 0, v: v0, a: v0 > 0 ? -(c + k * v0) : 0, done: !(v0 > 0) };
+      if (sig >= ts) return { d: stopDist(v0, c, k), v: 0, a: 0, done: true };
+      const A = v0 + c / k, e = Math.exp(-k * sig), v = A * e - c / k;
+      return { d: A * (1 - e) / k - (c / k) * sig, v, a: -(c + k * v), done: false };
+    }
+    // time (s) after release at which the sliding car has moved `dist` (< stop distance); bisection
+    function slideTimeFor(dist, v0, c, k) {
+      let lo = 0, hi = stopTime(v0, c, k);
+      for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (slide(m, v0, c, k).d < dist) lo = m; else hi = m; }
+      return (lo + hi) / 2;
+    }
+
+    // ---- whole attempt ----
+    // gap to the edge (m) after releasing at hold time tau, front starting D meters from the edge
+    function gapAfter(tau, D, vmax, c, k) { const h = hold(tau, vmax); return D - h.d - stopDist(h.v, c, k); }
+    // hold time that leaves `gap` meters (gap(tau) only decreases with tau)
+    function releaseFor(gap, D, vmax, c, k) {
+      let lo = 0, hi = holdTimeFor(D, vmax);
+      for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (gapAfter(m, D, vmax, c, k) > gap) lo = m; else hi = m; }
+      return (lo + hi) / 2;
+    }
+    // how many meters the result moves per second of release timing, near the edge
+    function sensitivity(D, vmax, c, k) {
+      const t0 = releaseFor(0, D, vmax, c, k), h = 1e-4;
+      return (gapAfter(t0 - h, D, vmax, c, k) - gapAfter(t0 + h, D, vmax, c, k)) / (2 * h);
+    }
+
+    // ---- fair targets (see tools/sim and reports for how these were chosen) ----
+    // Release-timing noise of the reference player (seconds): human timing spread, touch-screen
+    // sampling (uniform over q) and the learning bias left over the first attempts on a cliff.
+    const REF = { st: 0.015, q: 0.008, bias0: 0.040, learned: 0.25 };
+    function timingSigma(prof) {
+      const p = prof || REF;
+      return Math.sqrt(p.st * p.st + p.q * p.q / 12 + p.learned * p.bias0 * p.bias0);
+    }
+    // inverse standard normal CDF (Acklam's approximation, |error| < 1.2e-9)
+    function normInv(pr) {
+      const a = [-39.6968302866538, 220.946098424521, -275.928510446969, 138.357751867269, -30.6647980661472, 2.50662827745924];
+      const b = [-54.4760987982241, 161.585836858041, -155.698979859887, 66.8013118877197, -13.2806815528857];
+      const c = [-0.00778489400243029, -0.322396458041136, -2.40075827716184, -2.54973253934373, 4.37466414146497, 2.93816398269878];
+      const d = [0.00778469570904146, 0.32246712907004, 2.445134137143, 3.75440866190742];
+      const pl = 0.02425;
+      if (pr < pl) { const q = Math.sqrt(-2 * Math.log(pr)); return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1); }
+      if (pr > 1 - pl) { const q = Math.sqrt(-2 * Math.log(1 - pr)); return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1); }
+      const q = pr - 0.5, r = q * q;
+      return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
+    }
+    // Intended per-attempt success for the reference player on cliff n (the difficulty curve).
+    const CURVE = { start: 0.95, n1: 3, mid: 0.70, n2: 10, late: 0.45, n3: 20, plateau: 0.38, relief: 0.12 };
+    function successGoal(n) {
+      const C = CURVE;
+      let p;
+      if (n <= C.n1) p = C.start;
+      else if (n <= C.n2) p = C.start + (C.mid - C.start) * (n - C.n1) / (C.n2 - C.n1);
+      else if (n <= C.n3) p = C.mid + (C.late - C.mid) * (n - C.n2) / (C.n3 - C.n2);
+      else p = C.plateau;
+      if (n > 1 && (n - 1) % 5 === 0) p = Math.min(C.start, p + C.relief);   // checkpoint cliffs: a breather
+      return p;
+    }
+    // Target (cm) giving success probability p for a cliff, rounded up to 0.5 cm, 0.5..100 cm.
+    function targetFor(p, D, vmax, c, k, prof) {
+      const sPos = sensitivity(D, vmax, c, k) * timingSigma(prof);          // result spread (m)
+      const T = 2 * sPos * normInv((1 + p) / 2) * 100;
+      return Math.min(100, Math.max(0.5, Math.ceil(T * 2) / 2));
+    }
+
+    // ---- stop quality: PERFECT < GREAT < success threshold, always in that order ----
+    const GRADE = { greatFrac: 0.4, greatMax: 10, perfectFrac: 0.2, perfectMax: 2 };
+    function grade(resultCm, targetCm) {
+      if (!(resultCm >= 0) || !(resultCm < targetCm)) return null;            // only successful stops
+      const great = Math.min(GRADE.greatMax, GRADE.greatFrac * targetCm);
+      const perfect = Math.min(GRADE.perfectMax, GRADE.perfectFrac * targetCm, great * 0.5);
+      return resultCm < perfect ? 'PERFECT' : resultCm < great ? 'GREAT' : 'GOOD';
+    }
+
+    // ---- cliffs ----
+    // seeded layout: same numbers for everyone for the same key (daily, and cliffs 11+)
+    function seededParams(key) {
+      let h = 2166136261;
+      for (const ch of key) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+      let a = h >>> 0;
+      const r = () => { a = (a + 0x6D2B79F5) >>> 0; let x = a; x = Math.imul(x ^ (x >>> 15), x | 1); x ^= x + Math.imul(x ^ (x >>> 7), x | 61); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
+      return {
+        si: Math.floor(r() * SURFACES.length),
+        dist: Math.round((8 + r() * 5) * 1000) / 1000,
+        vmax: Math.round((6 + r() * 3) * 1000) / 1000,
+      };
+    }
+    // First 10 cliffs, designed by hand (si: 0 road, 1 ice, 2 mud). See reports for each one's purpose.
+    const CURATED = [
+      { si: 0, dist: 8,  vmax: 6 },
+      { si: 0, dist: 10, vmax: 7 },
+      { si: 2, dist: 9,  vmax: 7 },
+      { si: 2, dist: 11, vmax: 8 },
+      { si: 0, dist: 12, vmax: 8 },
+      { si: 1, dist: 10, vmax: 6 },
+      { si: 1, dist: 12, vmax: 7 },
+      { si: 0, dist: 13, vmax: 9 },
+      { si: 2, dist: 12, vmax: 9 },
+      { si: 1, dist: 13, vmax: 8 },
+    ];
+    function cliffParams(n) { return n >= 1 && n <= CURATED.length ? Object.assign({}, CURATED[n - 1]) : seededParams('cliff-' + n); }
+    function cliffTarget(n, prm) {
+      const S = SURFACES[prm.si];
+      return targetFor(successGoal(n), prm.dist, prm.vmax, S.base, S.drag);
+    }
+
+    return { ACCEL, SURFACES, hold, holdTimeFor, stopTime, stopDist, slide, slideTimeFor, gapAfter, releaseFor,
+             sensitivity, REF, timingSigma, normInv, CURVE, successGoal, targetFor, GRADE, grade,
+             seededParams, CURATED, cliffParams, cliffTarget };
+  })();
+  /* PHYSICS-END */
+
+  // Visual look of each ground type (physics values come from Physics.SURFACES).
+  const SURFACE_LOOK = {
+    ROAD: { top: '#6a6e84', side: '#3d4052', dust: '#c9cbd6' },
+    ICE:  { top: '#d4f1ff', side: '#7cc4e6', dust: '#ffffff' },
+    MUD:  { top: '#8a5a33', side: '#5e3b1f', dust: '#a8774a' },
+  };
+  const SURFACES = Physics.SURFACES.map(p => Object.assign({}, p, SURFACE_LOOK[p.name]));
 
   // Character looks. Only one for now; later these become cosmetic items (never affect score).
   const SKINS = [
@@ -106,16 +258,12 @@
   ];
   let skin = SKINS[0];
 
-  // Endless cliffs, each target smaller. Progress is never wiped:
+  // Endless cliffs. Progress is never wiped:
   //  - 3 hearts: a miss costs one heart and you retry the same cliff;
   //  - a checkpoint every 5 cliffs (1, 6, 11, 16...): losing all hearts sends you back only to it;
   //  - the current cliff is saved, so closing the game keeps your place.
-  // Score: the farthest cliff reached. Targets: 100, 78, 61, 47, 37, 29 ... 10, 8.3, 6.5 ... down to 1 cm, then 1 cm forever.
-  function runTarget(n) {
-    const v = 100 * Math.pow(0.78, n);
-    if (v >= 10) return Math.round(v);
-    return Math.max(1, Math.round(v * 10) / 10);
-  }
+  // Score: the farthest cliff reached. Each cliff's target comes from Physics.cliffTarget: it is sized
+  // so a typical player has a chosen chance of success (the difficulty curve), never by luck.
 
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
@@ -164,7 +312,12 @@
   // Storage keys: the platform build saves under its own names (cg_ prefix), so the preview on the
   // same website never reads or changes the web version's saved progress. The web build keeps the
   // original names unchanged. No data is moved or deleted.
-  function storeKey(key) { return IS_PORTAL ? 'cg_' + key : key; }
+  // An experimental build may set its own prefix (window.CLIFF_STORE_PREFIX, e.g. 'cg2_') so it is
+  // isolated from both of the others too. Only short lowercase prefixes are accepted.
+  const STORE_PREFIX = IS_PORTAL
+    ? (typeof window.CLIFF_STORE_PREFIX === 'string' && /^[a-z0-9_]{1,8}$/.test(window.CLIFF_STORE_PREFIX) ? window.CLIFF_STORE_PREFIX : 'cg_')
+    : '';
+  function storeKey(key) { return STORE_PREFIX + key; }
   function load(key, fallback) { try { const v = localStorage.getItem(storeKey(key)); return v === null ? fallback : parseFloat(v); } catch (e) { return fallback; } }
   function save(key, v) { try { localStorage.setItem(storeKey(key), String(v)); } catch (e) {} }
   let best = load('cliff_best', null);
@@ -235,18 +388,7 @@
   const ASSIST = !new URLSearchParams(location.search).has('classic');
   let lastTry = null;   // { key, release, stop } in meters (car front), from the previous try
 
-  function dailyParams() { return seededParams('cliff-edge-' + dayKey()); }
-  function seededParams(key) {
-    let h = 2166136261;
-    for (const ch of key) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
-    let a = h >>> 0;
-    const r = () => { a = (a + 0x6D2B79F5) >>> 0; let x = a; x = Math.imul(x ^ (x >>> 15), x | 1); x ^= x + Math.imul(x ^ (x >>> 7), x | 61); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
-    return {
-      si: Math.floor(r() * SURFACES.length),
-      dist: Math.round((8 + r() * 5) * 1000) / 1000,
-      vmax: Math.round((6 + r() * 3) * 1000) / 1000,
-    };
-  }
+  function dailyParams() { return Physics.seededParams('cliff-edge-' + dayKey()); }
   function nextDailyIn() {
     const now = new Date();
     const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
@@ -295,7 +437,7 @@
       ({ si, dist, vmax } = dailyParams());
     } else {
       mode = 'run';
-      if (ASSIST) ({ si, dist, vmax } = seededParams('cliff-' + cliff));   // cliff 7 is the same cliff every time
+      if (ASSIST) ({ si, dist, vmax } = Physics.cliffParams(cliff));   // cliff 7 is the same cliff every time
     }
     const surface = SURFACES[si];
     const layoutKey = fr ? 'friend' : daily ? 'daily-' + dayKey() : 'cliff-' + cliff + (ASSIST ? '' : '-' + roundCounter);
@@ -305,11 +447,15 @@
       surface,
       params: { si, dist, vmax },
       friend: fr, friendTry: fr ? fr.tries : 0, friendWin: false,
-      daily, dailyTry: 0, newDailyBest: false, layoutKey, releaseFront: null,
-      cliff, target: runTarget(cliff - 1), cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
+      daily, dailyDay: daily ? dayKey() : null, dailyTry: 0, newDailyBest: false, layoutKey, releaseFront: null,
+      cliff, target: Physics.cliffTarget(cliff, { si, dist, vmax }), grade: null, cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
       vmax,
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
+      x0: EDGE_X / PPM - dist - CAR_LEN, dist,
       v: 0, a: 0,
+      // Exact timing (ms, performance.now timebase): press, release, and when the car stops or
+      // crosses the edge. The result is decided at the release moment itself, not at a frame.
+      tPress: 0, tRel: 0, relD: 0, relV: 0, gap: null, stopAt: Infinity, crossAt: Infinity,
       tilt: 0, tiltV: 0,                              // body pitch (spring)
       eyeX: 1.5, eyeV: 0, eyeY: 0, eyeYV: 0, ant: 0, antV: 0, sq: 0, sqV: 0,
       result: null, newBest: false, beat: false,
@@ -338,12 +484,22 @@
     if (challengeVisible() && inBtn(CHALLENGE_BTN, lx, ly)) { pendingChallenge = true; return; }
     if (shareVisible() && inShareBtn(lx, ly)) { pendingShare = true; return; }
     if (pillVisible() && inBtn(DAILY_PILL, lx, ly + 0)) { toggleDaily(); return; }
-    pressGame(e.pointerId);
+    pressGame(e.pointerId, evT(e));
+  }
+  // The moment an input really happened. Event timestamps share performance.now's clock; a missing,
+  // non-finite or out-of-range one (old browsers used a different clock) falls back to "now".
+  function evT(e) {
+    const now = performance.now(), t = e && e.timeStamp;
+    if (typeof t === 'number' && isFinite(t) && t > now - 1000 && t <= now + 5) return Math.min(t, now);
+    return now;
   }
   // The one game action, shared by touch, mouse and keyboard: start driving, or start the next round.
-  function pressGame(id) {
+  function pressGame(id, t) {
     const now = performance.now();
     if (s.state === 'ready') {
+      // A daily screen opened before midnight (UTC) shows yesterday's cliff: switch to today's
+      // cliff first, without using a try. The player presses again to play it.
+      if (s.daily && s.dailyDay !== dayKey()) { newRound(); return; }
       if (s.daily) {
         const d = getDaily(); d.tries++; saveJSON('cliff_daily', d);
         s.dailyTry = d.tries;
@@ -352,6 +508,8 @@
       activePointer = id;
       if (typeof id === 'number') { try { canvas.setPointerCapture(id); } catch (err) {} }
       s.state = 'holding';
+      s.tPress = t === undefined ? now : t;
+      s.crossAt = s.tPress + Physics.holdTimeFor(s.dist, s.vmax) * 1000;   // still holding then = over the edge
       roundsPlayed++; save('cliff_rounds', roundsPlayed);
       Track.send(s.daily ? 'daily' : 'round', s.daily ? s.dailyTry : s.cliff);
       Rec.start(s.id);
@@ -367,7 +525,29 @@
     if (pendingShare) { pendingShare = false; doShare(); return; }
     if (activePointer !== null && e.pointerId !== activePointer) return;
     activePointer = null;
-    if (s.state === 'holding') { s.state = 'sliding'; s.releaseFront = frontX(); }
+    if (s.state === 'holding') releaseAt(evT(e));
+  }
+  // Let go at time t (ms): position and speed at that exact moment decide the whole outcome.
+  function releaseAt(t) {
+    t = Math.max(s.tPress, t);
+    if (t >= s.crossAt) return;                       // already past the edge: the fall is certain
+    const h = Physics.hold((t - s.tPress) / 1000, s.vmax);
+    const c = s.surface.base, k = s.surface.drag;
+    s.state = 'sliding';
+    s.tRel = t; s.relD = h.d; s.relV = h.v;
+    s.releaseFront = s.x0 + CAR_LEN + h.d;
+    s.gap = s.dist - h.d - Physics.stopDist(h.v, c, k);           // final distance to the edge (m)
+    if (s.gap >= 0) { s.stopAt = t + Physics.stopTime(h.v, c, k) * 1000; s.crossAt = Infinity; }
+    else { s.stopAt = Infinity; s.crossAt = t + Physics.slideTimeFor(s.dist - h.d, h.v, c, k) * 1000; }
+  }
+  // Car position and speed at time t (ms), straight from the equations.
+  function motionAt(t) {
+    if (s.state === 'holding' || t < s.tRel) {
+      const h = Physics.hold((t - s.tPress) / 1000, s.vmax);
+      return { d: h.d, v: h.v, a: h.v > 0 ? h.a : 0 };
+    }
+    const m = Physics.slide((t - s.tRel) / 1000, s.relV, s.surface.base, s.surface.drag);
+    return { d: s.relD + m.d, v: m.v, a: m.a };
   }
   canvas.addEventListener('pointerdown', press);
 
@@ -386,10 +566,13 @@
   window.addEventListener('keyup', e => {
     if (!GAME_KEYS[e.key]) return;
     e.preventDefault();
-    if (activePointer === 'key') release({ pointerId: 'key' });
+    if (activePointer === 'key') release({ pointerId: 'key', timeStamp: e.timeStamp });
   });
-  // If the window loses focus while a key is held, let go (otherwise the car would drive off the cliff).
-  window.addEventListener('blur', () => { if (activePointer === 'key') release({ pointerId: 'key' }); });
+  // If the window loses focus or the page is hidden while holding (key, mouse or finger), let go
+  // (otherwise the car would drive off the cliff while the player can't see it).
+  function releaseAll() { if (activePointer !== null) release({ pointerId: activePointer }); }
+  window.addEventListener('blur', releaseAll);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
   canvas.addEventListener('pointerup', release);
   canvas.addEventListener('lostpointercapture', release);
   window.addEventListener('pointerup', release);
@@ -968,39 +1151,39 @@
   }
 
   // ---------- Update ----------
-  function update(rawDt) {
+  function update(rawDt, now) {
+    if (now === undefined) now = performance.now();
     // Slow motion for the first moment of a fall: the dramatic part.
     let dt = rawDt;
     if (s.state === 'falling' && s.fallT < 0.45) dt = rawDt * 0.3;
 
-    const prevV = s.v;
-    if (s.state === 'holding') {
-      s.v = Math.min(s.vmax, s.v + ACCEL * dt);
-    } else if (s.state === 'sliding') {
-      const decel = s.surface.base + s.surface.drag * s.v;
-      s.v = Math.max(0, s.v - decel * dt);
-      if (s.v < 0.01) s.v = 0;
-      if (s.v > 0.4 && Math.random() < 0.9) spawnDust(Math.random() < s.v / 6 ? 2 : 1);
-    }
-    s.a = dt > 0 ? (s.v - prevV) / dt : 0;
-
     if (s.state === 'holding' || s.state === 'sliding') {
-      s.x += s.v * dt;
-      if (frontX() > edgeM) {
+      // Over the edge? Place the car exactly where it crossed, at its speed then.
+      const over = now >= s.crossAt;
+      const m = motionAt(over ? s.crossAt : s.state === 'sliding' ? Math.min(now, s.stopAt) : now);
+      // A release that arrives late (busy phone) is still applied at its real time; the drawn car
+      // just never steps backwards while it catches up with the exact slide.
+      s.x = s.state === 'sliding' ? Math.max(s.x, s.x0 + m.d) : s.x0 + m.d; s.v = m.v; s.a = m.a;
+      if (s.state === 'sliding' && s.v > 0.4 && Math.random() < 0.9) spawnDust(Math.random() < s.v / 6 ? 2 : 1);
+      if (over) {
         startFall();
-      } else if (s.state === 'sliding' && s.v === 0) {
+      } else if (s.state === 'sliding' && now >= s.stopAt) {
+        s.v = 0; s.a = 0;
+        s.x = s.x0 + s.dist - s.gap;                  // front exactly gap meters from the edge
         s.state = 'stopped';
         s.endAt = performance.now();
-        s.result = (edgeM - frontX()) * 100;          // centimeters
+        s.result = s.gap * 100;                       // centimeters, decided at the release moment
         rememberTry(true);
         if (s.friend) { s.friendWin = s.friend.score === null || s.result < s.friend.score; if (s.friendWin) s.friend.won = true; }
         if (best === null || s.result < best) { best = s.result; save('cliff_best', best); s.newBest = true; }
         if (s.daily) {
+          // The round belongs to the day it was made for; after midnight it no longer changes the new day.
           const d = getDaily();
-          if (d.best === null || s.result < d.best) { d.best = s.result; s.newDailyBest = true; saveJSON('cliff_daily', d); }
+          if (d.day === s.dailyDay && (d.best === null || s.result < d.best)) { d.best = s.result; s.newDailyBest = true; saveJSON('cliff_daily', d); }
         } else if (!s.friend) {
           if (s.result < s.target) {
             s.cleared = true;
+            s.grade = Physics.grade(s.result, s.target);
             cliff++;
             if (isCheckpoint(cliff)) { checkpoint = cliff; hearts = HEARTS; s.newCp = true; }
             if (cliff > bestCliff) { bestCliff = cliff; s.newBestCliff = true; }
@@ -1512,7 +1695,7 @@
   function frame(now) {
     const dt = Math.min(0.033, (now - last) / 1000);
     last = now;
-    update(dt);
+    update(dt, now);
     Sound.update(s);
     Rec.tick(s);
     draw();
@@ -1521,6 +1704,7 @@
   }
   requestAnimationFrame(frame);
   window.__cliff = () => s;   // used only for automated testing
+  window.__physics = Physics;   // used only for automated testing and tools/sim
   window.__shareVisible = () => shareVisible();
 })();
 </script>
