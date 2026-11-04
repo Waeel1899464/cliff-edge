@@ -192,5 +192,46 @@ function main() {
   return out.join('\n');
 }
 
-if (require.main === module) console.log(main());
-module.exports = { Physics, PROFILES, DESIGNS, attempt, perCliff, session, rng, oldGap, oldTarget };
+// ===================== V3 story worlds (exact twists from the Physics block) =====================
+// The player sees fog/shaking too: their misjudgment and spread grow the same way the target does.
+function playerFor(prof, sp) { return { st: prof.st * (1 + 0.5 * sp.quake), q: prof.q, bias0: prof.bias0 * (1 + sp.fog) }; }
+function attemptS(sp, T, prof, bias, r) {
+  const pl = playerFor(prof, sp);
+  const tIdeal = Physics.releaseS(Math.min(T / 2, 50) / 100, sp);           // aim for the middle of the zone
+  const tRel = Math.max(0, tIdeal + bias + pl.st * r.n() + pl.q * r.u() - pl.q / 2);
+  const g = Physics.gapS(tRel, sp), fell = g < 0, cm = fell ? null : g * 100;
+  return { ok: !fell && cm < T, fell, cm };
+}
+function twistOf(sp) {
+  const t = [];
+  if (sp.slope) t.push('slope ' + sp.slope);
+  if (sp.wind) t.push((sp.wind > 0 ? 'tail' : 'head') + ' wind ' + Math.abs(sp.wind));
+  if (sp.patches.length) t.push(sp.patches.map(p => Physics.SURFACES[p.si].name.toLowerCase() + ' @' + p.at + 'm').join(', '));
+  if (sp.crumble.length) t.push(sp.crumble.length + ' crumbling pieces');
+  if (sp.fog) t.push('fog'); if (sp.quake) t.push('quake'); if (sp.gs !== 1) t.push('gravity ' + sp.gs);
+  return (sp.boss ? 'BOSS: ' : '') + (t.join(', ') || '—');
+}
+function worldTable(w, runs) {
+  const out = [`## World ${w}: ${Physics.WORLDS[w - 1].name} — success on first try / on a retry (${runs} tries each)\n`,
+    '| Cliff | Ground | Twist | Dist m | Speed | Goal | Target cm | Skilled | Average | Beginner |', '|---|---|---|---|---|---|---|---|---|---|'];
+  for (let k = 1; k <= 10; k++) {
+    const n = (w - 1) * 10 + k;
+    if (n > Physics.CLIFFS.length) break;
+    const sp = Physics.cliffSpec(n), T = Physics.storyTarget(n, sp);
+    const cells = Object.values(PROFILES).map((pr, j) => {
+      const r = rng(31 * n + j), pl = playerFor(pr, sp); let a = 0, b = 0;
+      for (let i = 0; i < runs; i++) { a += attemptS(sp, T, pr, pl.bias0 * r.n(), r).ok; b += attemptS(sp, T, pr, pl.bias0 * 0.5 * r.n(), r).ok; }
+      return p0(a / runs) + ' / ' + p0(b / runs);
+    });
+    out.push(`| ${w}-${k} | ${Physics.SURFACES[sp.si].name} | ${twistOf(sp)} | ${sp.dist} | ${sp.vmax} | ${p0(Physics.storyGoal(n, sp))} | ${T} | ${cells.join(' | ')} |`);
+  }
+  return out.join('\n') + '\n';
+}
+
+if (require.main === module) {
+  const wi = args.indexOf('--world');
+  if (wi >= 0) console.log(worldTable(+args[wi + 1], RUNS));
+  else if (args.includes('--worlds')) { for (let w = 1; w <= 5; w++) if ((w - 1) * 10 < Physics.CLIFFS.length) console.log(worldTable(w, RUNS)); }
+  else console.log(main());
+}
+module.exports = { Physics, PROFILES, DESIGNS, attempt, perCliff, session, rng, oldGap, oldTarget, attemptS, worldTable, playerFor };

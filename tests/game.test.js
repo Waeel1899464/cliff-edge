@@ -2,14 +2,14 @@
 // checkpoints, save/load and isolation between the three versions, zones, shorter repeated falls.
 const { chromium, serve, check, summary, open, IN_PAGE } = require('./lib');
 
-const V2 = '/platform/crazygames-v2/index.html';
+const V2 = process.env.PAGE || '/platform/crazygames-v3/index.html';
 const DAY = Date.UTC(2026, 10, 4);          // 2026-11-04 00:00 UTC
 
 // play one round in the page: hold so the car stops `gapCm` from the edge (negative = fall)
 const PLAY = `
   window.__playGap = (gapCm) => {
     const s0 = window.__cliff(), P = window.__physics, S = s0.surface;
-    const tHold = gapCm <= -100 ? P.holdTimeFor(s0.dist, s0.vmax) + 0.3 : P.releaseFor(gapCm / 100, s0.dist, s0.vmax, S.base, S.drag);
+    const tHold = gapCm <= -100 ? P.holdTimeForS(P.edgeAt(s0.spec, Infinity), s0.spec) + 0.3 : P.releaseS(gapCm / 100, s0.spec);
     const tp = window.__T(); window.__ptr('pointerdown', tp);
     let released = false;
     for (let i = 0; i < 3000; i++) {
@@ -35,7 +35,7 @@ const PLAY = `
         for (let n = 1; n <= 12; n++) {
           const prm = P.cliffParams(n), S = P.SURFACES[prm.si];
           const tRel = P.releaseFor(0, prm.dist, prm.vmax, S.base, S.drag);
-          rows.push({ n, s: S.name, prm, T: P.cliffTarget(n, prm), atTop: tRel > prm.vmax / P.ACCEL + 0.15, sens: P.sensitivity(prm.dist, prm.vmax, S.base, S.drag) });
+          rows.push({ n, s: S.name, prm, T: P.cliffTarget(n, prm), T3: P.storyTarget(n, P.cliffSpec(n)), atTop: tRel > prm.vmax / P.ACCEL + 0.15, sens: P.sensitivity(prm.dist, prm.vmax, S.base, S.drag) });
         }
         return rows;
       });
@@ -49,7 +49,9 @@ const PLAY = `
       console.log('     targets 1–12: ' + r.map(x => x.n + ':' + x.s[0] + ' ' + x.T).join('  '));
       // play the first 10 cliffs in the game, stopping at 40% of each target: all cleared, in order
       const run = await page.evaluate(() => { const out = []; for (let i = 0; i < 10; i++) { const s = window.__cliff(); const T = s.target; const res = window.__playGap(T * 0.4); out.push([s.cliff, T, res.cleared]); window.__next(); } return { out, now: window.__cliff().cliff }; });
-      check('C: playing cliffs 1–10 in the game uses these layouts and targets; all clear in order', run.out.every((x, i) => x[0] === i + 1 && x[1] === r[i].T && x[2]) && run.now === 11, run.out.map(x => x[1]).join(','));
+      check('C: playing cliffs 1–10 (world 1) in the game uses the V3 story targets; all clear in order', run.out.every((x, i) => x[0] === i + 1 && x[1] === r[i].T3 && x[2]) && run.now === 11, run.out.map(x => x[1]).join(','));
+      const w1 = await page.evaluate(() => { const P = window.__physics; return { same: [1,2,3,4,5,6,7,8,9].every(n => { const a = P.cliffSpec(n), b = P.CURATED[n - 1]; return a.si === b.si && a.dist === b.dist && a.vmax === b.vmax && !a.slope && !a.wind && a.gs === 1 && !a.patches.length && !a.crumble.length; }), boss: P.cliffSpec(10) }; });
+      check('V3: world 1 cliffs 1–9 are exactly V2\'s hand-made cliffs (no twists); cliff 10 is the boss slope', w1.same && w1.boss.boss === true && w1.boss.slope > 0, JSON.stringify(w1.boss));
       check('no page errors (first 10 cliffs)', errors.length === 0, errors.join('|'));
       await ctx.close();
     }
@@ -102,7 +104,7 @@ const PLAY = `
       // the manual clock starts 30 s before midnight UTC
       const { page, ctx, errors } = await open(browser, srv.url + V2, { manualClock: true, base: DAY - 30000 - 1000, init: IN_PAGE + PLAY });
       const r = await page.evaluate((scenario) => {
-        const sk = k => 'cg2_' + k;
+        const sk = k => 'cg3_' + k;
         const P = window.__physics;
         const dayOf = () => new Date(Date.now()).toISOString().slice(0, 10);
         const yParams = P.seededParams('cliff-edge-' + dayOf());
@@ -163,7 +165,7 @@ const PLAY = `
     {
       const { page, ctx, errors } = await open(browser, srv.url + V2, { manualClock: true, init: IN_PAGE + PLAY });
       const r = await page.evaluate(() => {
-        const out = {}, k = n => localStorage.getItem('cg2_cliff_' + n);
+        const out = {}, k = n => localStorage.getItem('cg3_cliff_' + n);
         for (let i = 0; i < 5; i++) { window.__playGap(window.__cliff().target * 0.4); window.__next(); }
         out.cp = window.__cliff().cliff === 6 && k('cp') === '6' && k('cur') === '6' && k('hearts') === '3';
         const a = window.__playGap(-999); window.__next();
@@ -184,7 +186,7 @@ const PLAY = `
       await ctx.close();
     }
 
-    // ---------- storage isolation: web keys / cg_ (first preview) / cg2_ (v2) ----------
+    // ---------- storage isolation: web keys / cg_ (first preview) / cg3_ (v2) ----------
     {
       const ctx = await browser.newContext();
       const page = await ctx.newPage();
@@ -202,13 +204,13 @@ const PLAY = `
       await page.waitForTimeout(2500); await page.mouse.click(box.x + box.width / 2, box.y + box.height * 0.6); await page.waitForTimeout(300);
       const sc = box.width / 540; await page.mouse.click(box.x + (540 - 44) * sc, box.y + 50 * sc); await page.waitForTimeout(100);
       const after = await page.evaluate(() => Object.keys(localStorage).sort().map(k => [k, localStorage.getItem(k)]));
-      const untouched = JSON.stringify(after.filter(([k]) => !k.startsWith('cg2_'))) === before;
-      const own = after.filter(([k]) => k.startsWith('cg2_')).map(([k]) => k);
-      check('isolation: v2 starts fresh (cliff 1, 3 hearts) even with web and cg_ saves present', start.cliff === 1 && start.hearts === 3);
+      const untouched = JSON.stringify(after.filter(([k]) => !k.startsWith('cg3_'))) === before;
+      const own = after.filter(([k]) => k.startsWith('cg3_')).map(([k]) => k);
+      check('isolation: v3 starts fresh (cliff 1, 3 hearts) even with web and cg_ saves present', start.cliff === 1 && start.hearts === 3);
       check('isolation: playing v2 changes none of the web or cg_ keys', untouched);
-      check('isolation: v2 writes only cg2_ keys', own.length >= 4 && own.includes('cg2_cliff_muted') && own.includes('cg2_cliff_dev'), own.join(','));
+      check('isolation: v3 writes only cg3_ keys', own.length >= 4 && own.includes('cg3_cliff_muted') && own.includes('cg3_cliff_dev'), own.join(','));
       // a bad prefix is refused: the page falls back to cg_
-      const html = require('fs').readFileSync(require('path').join(__dirname, '..', V2), 'utf8').replace("window.CLIFF_STORE_PREFIX = 'cg2_'", "window.CLIFF_STORE_PREFIX = '../Evil-prefix'");
+      const html = require('fs').readFileSync(require('path').join(__dirname, '..', V2), 'utf8').replace("window.CLIFF_STORE_PREFIX = 'cg3_'", "window.CLIFF_STORE_PREFIX = '../Evil-prefix'");
       await page.route('**/bad-prefix.html', r => r.fulfill({ contentType: 'text/html', body: html }));
       await page.goto(srv.url + '/bad-prefix.html'); await page.waitForFunction(() => typeof window.__cliff === 'function');
       await page.mouse.click(box.x + (540 - 44) * sc, box.y + 50 * sc); await page.waitForTimeout(100);
@@ -234,8 +236,8 @@ const PLAY = `
         out.fall = t;
         return out;
       });
-      check('G: sky changes at cliff 6 and 11 (page sides follow), cliffs 1–5 share one sky', z.zones[0] === z.zones[4] && z.zones[5] !== z.zones[4] && z.zones[10] !== z.zones[5], '');
-      check('H: first fall full (0.45 s slow motion, 0.9 s end), later falls shorter (0.2 s, 0.45 s)', z.fall[0].slow === 0.45 && z.fall[0].end === 0.9 && z.fall[1].slow === 0.2 && z.fall[2].end === 0.45);
+      check('G (V3): one look per world: cliffs 1–10 share the Green Hills look, cliff 11 (world 2) changes it (page sides follow)', z.zones[1] === z.zones[9] && z.zones[10] !== z.zones[9], '');
+      check('H: first fall full (0.45 s slow motion, 0.9 s end), later falls shorter (0.2 s, 0.45 s)', z.fall[0].slow === 0.45 && z.fall[0].end === 0.9 && z.fall[1].slow === 0.2 && z.fall[2].end === 0.45, JSON.stringify(z.fall) + ' cliff ' + z.cliff);
       check('no page errors (zones, falls)', errors.length === 0, errors.join('|'));
       // quick retry: during a fall, a tap after 0.3 s starts the next round
       const q = await page.evaluate(() => { const s0 = window.__cliff(); const tp = window.__T(); window.__ptr('pointerdown', tp); for (let i = 0; i < 400 && window.__cliff().state !== 'falling'; i++) window.__frame(16); window.__frame(16); for (let i = 0; i < 20; i++) window.__frame(16); window.__ptr('pointerdown', window.__T()); window.__ptr('pointerup', window.__T()); return window.__cliff().state; });
@@ -246,7 +248,7 @@ const PLAY = `
     // ---------- night zone screenshot for the report (visual check) ----------
     {
       const { page, ctx, errors } = await open(browser, srv.url + V2, { manualClock: true, init: IN_PAGE + PLAY, context: { viewport: { width: 540, height: 960 }, deviceScaleFactor: 1 } });
-      await page.evaluate(() => { localStorage.setItem('cg2_cliff_cur', '11'); localStorage.setItem('cg2_cliff_cp', '11'); localStorage.setItem('cg2_cliff_bestcliff', '11'); });
+      await page.evaluate(() => { localStorage.setItem('cg3_cliff_cur', '11'); localStorage.setItem('cg3_cliff_cp', '11'); localStorage.setItem('cg3_cliff_bestcliff', '11'); });
       await page.reload(); await page.waitForFunction(() => typeof window.__cliff === 'function');
       await page.evaluate(() => { for (let i = 0; i < 3; i++) window.__frame(16); });
       const dir = process.env.SHOTS; if (dir) await page.screenshot({ path: dir + '/zone_night_ready.png' });

@@ -24,6 +24,17 @@ if [ "$TARGET" = "crazygames-v2" ] || [ "$TARGET" = "preview-v2" ]; then
   exit 0
 fi
 
+# V3 worlds builds (feature/worlds): own storage prefix cg3_, so they never touch any other saves.
+#   ./build.sh crazygames-v3 -> platform/crazygames-v3/index.html
+#   ./build.sh preview-v3    -> docs/crazygames-preview-v3/index.html (identical file)
+if [ "$TARGET" = "crazygames-v3" ] || [ "$TARGET" = "preview-v3" ]; then
+  if [ "$TARGET" = "crazygames-v3" ]; then OUT=platform/crazygames-v3; else OUT=docs/crazygames-preview-v3; fi
+  mkdir -p "$OUT"
+  "$0" crazygames-stdout | sed "s#<script>window.CLIFF_BUILD = 'crazygames';</script>#<script>window.CLIFF_BUILD = 'crazygames'; window.CLIFF_STORE_PREFIX = 'cg3_';</script>#" > "$OUT/index.html"
+  echo "built $OUT/index.html"
+  exit 0
+fi
+
 if [ "$TARGET" = "crazygames" ] || [ "$TARGET" = "crazygames-stdout" ]; then
   [ "$TARGET" = "crazygames" ] && mkdir -p platform/crazygames
   {
@@ -52,7 +63,7 @@ HEAD
   exit 0
 fi
 
-if [ "$TARGET" != "web" ]; then echo "unknown target: $TARGET (use: web | crazygames | crazygames-v2 | preview-v2)"; exit 1; fi
+if [ "$TARGET" != "web" ]; then echo "unknown target: $TARGET (use: web | crazygames | crazygames-v2 | preview-v2 | crazygames-v3 | preview-v3)"; exit 1; fi
 
 # ---------------------------------------------------------------------------
 # Web build (GitHub Pages): ./build.sh  or  ./build.sh web  -> docs/index.html

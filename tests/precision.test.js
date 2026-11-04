@@ -2,7 +2,7 @@
 // events, keyboard and pointer, blur / visibility / pointercancel.
 const { chromium, serve, check, summary, open, IN_PAGE } = require('./lib');
 
-const PAGE = '/platform/crazygames-v2/index.html';
+const PAGE = process.env.PAGE || '/platform/crazygames-v3/index.html';
 const RATES = [30, 60, 120, 144];
 
 (async () => {
