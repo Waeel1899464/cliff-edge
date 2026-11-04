@@ -159,9 +159,10 @@
     }
 
     // ---- fair targets (see tools/sim and reports for how these were chosen) ----
-    // Release-timing noise of the reference player (seconds): human timing spread, touch-screen
-    // sampling (uniform over q) and the learning bias left over the first attempts on a cliff.
-    const REF = { st: 0.015, q: 0.008, bias0: 0.040, learned: 0.25 };
+    // Release-timing noise of the reference ("average") player on a FIRST try at a cliff (seconds):
+    // human timing spread, touch-screen sampling (uniform over q) and the misjudgment of a cliff not
+    // seen before (learned = 1: none of it learned yet). Retries are easier: the ghost helps.
+    const REF = { st: 0.015, q: 0.008, bias0: 0.040, learned: 1 };
     function timingSigma(prof) {
       const p = prof || REF;
       return Math.sqrt(p.st * p.st + p.q * p.q / 12 + p.learned * p.bias0 * p.bias0);
@@ -178,29 +179,32 @@
       const q = pr - 0.5, r = q * q;
       return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
     }
-    // Intended per-attempt success for the reference player on cliff n (the difficulty curve).
-    const CURVE = { start: 0.95, n1: 3, mid: 0.70, n2: 10, late: 0.45, n3: 20, plateau: 0.38, relief: 0.12 };
+    // Intended FIRST-try success of the reference player on cliff n (the difficulty curve).
+    const CURVE = { start: 0.92, n1: 3, mid: 0.60, n2: 10, late: 0.40, n3: 20, plateau: 0.25, n4: 50, relief: 0.12 };
     function successGoal(n) {
       const C = CURVE;
       let p;
       if (n <= C.n1) p = C.start;
       else if (n <= C.n2) p = C.start + (C.mid - C.start) * (n - C.n1) / (C.n2 - C.n1);
       else if (n <= C.n3) p = C.mid + (C.late - C.mid) * (n - C.n2) / (C.n3 - C.n2);
+      else if (n <= C.n4) p = C.late + (C.plateau - C.late) * (n - C.n3) / (C.n4 - C.n3);
       else p = C.plateau;
       if (n > 1 && (n - 1) % 5 === 0) p = Math.min(C.start, p + C.relief);   // checkpoint cliffs: a breather
       return p;
     }
-    // Target (cm) giving success probability p for a cliff, rounded up to 0.5 cm, 0.5..100 cm.
+    // Target (cm) giving success probability p for a cliff, 0.5..100 cm. Rounded up to what the
+    // screen shows exactly: whole cm from 10 cm, half cm below (the shown target is the real one).
     function targetFor(p, D, vmax, c, k, prof) {
       const sPos = sensitivity(D, vmax, c, k) * timingSigma(prof);          // result spread (m)
       const T = 2 * sPos * normInv((1 + p) / 2) * 100;
-      return Math.min(100, Math.max(0.5, Math.ceil(T * 2) / 2));
+      const r = T >= 10 ? Math.ceil(T) : Math.ceil(T * 2) / 2;
+      return Math.min(100, Math.max(0.5, r));
     }
 
     // ---- stop quality: PERFECT < GREAT < success threshold, always in that order ----
     const GRADE = { greatFrac: 0.4, greatMax: 10, perfectFrac: 0.2, perfectMax: 2 };
     function grade(resultCm, targetCm) {
-      if (!(resultCm >= 0) || !(resultCm < targetCm)) return null;            // only successful stops
+      if (typeof resultCm !== 'number' || !(resultCm >= 0) || !(resultCm < targetCm)) return null;   // only successful stops
       const great = Math.min(GRADE.greatMax, GRADE.greatFrac * targetCm);
       const perfect = Math.min(GRADE.perfectMax, GRADE.perfectFrac * targetCm, great * 0.5);
       return resultCm < perfect ? 'PERFECT' : resultCm < great ? 'GREAT' : 'GOOD';
@@ -220,17 +224,20 @@
       };
     }
     // First 10 cliffs, designed by hand (si: 0 road, 1 ice, 2 mud). See reports for each one's purpose.
+    // Road first; mud from cliff 3, mixed in gradually; ice only where the car is already at top
+    // speed when you let go (forgiving: the result moves at the car's speed, not faster), never two
+    // ice cliffs in a row; checkpoint cliff 6 is a gentle first ice.
     const CURATED = [
-      { si: 0, dist: 8,  vmax: 6 },
-      { si: 0, dist: 10, vmax: 7 },
-      { si: 2, dist: 9,  vmax: 7 },
-      { si: 2, dist: 11, vmax: 8 },
-      { si: 0, dist: 12, vmax: 8 },
-      { si: 1, dist: 10, vmax: 6 },
-      { si: 1, dist: 12, vmax: 7 },
-      { si: 0, dist: 13, vmax: 9 },
-      { si: 2, dist: 12, vmax: 9 },
-      { si: 1, dist: 13, vmax: 8 },
+      { si: 0, dist: 8,  vmax: 6 },     //  1 road, slow: learn hold and release
+      { si: 0, dist: 10, vmax: 6 },     //  2 road, longer drive
+      { si: 2, dist: 9,  vmax: 6 },     //  3 first mud: stops much sooner
+      { si: 0, dist: 11, vmax: 6.5 },   //  4 road, a bit faster
+      { si: 2, dist: 11, vmax: 7 },     //  5 mud, faster
+      { si: 1, dist: 11, vmax: 6 },     //  6 checkpoint: first ice, slow, top speed well before you let go
+      { si: 0, dist: 12, vmax: 8 },     //  7 fast road
+      { si: 2, dist: 12, vmax: 8.5 },   //  8 fast mud
+      { si: 0, dist: 13, vmax: 8.5 },   //  9 long fast road
+      { si: 1, dist: 13, vmax: 6.5 },   // 10 second ice, still at top speed when you let go
     ];
     function cliffParams(n) { return n >= 1 && n <= CURATED.length ? Object.assign({}, CURATED[n - 1]) : seededParams('cliff-' + n); }
     function cliffTarget(n, prm) {
@@ -706,6 +713,9 @@
       [523, 659, 784, 1047].forEach((f, i) => note(f, i * 0.09, i === 3 ? 0.7 : 0.18, 0.22, 'triangle'));
       note(2093, 0.27, 0.5, 0.06);
     }
+    // Small extras on top of the fanfare: GREAT adds one high bell, PERFECT a short sparkle.
+    function great() { if (ac) note(2637, 0.4, 0.45, 0.07); }
+    function perfect() { if (ac) [2093, 2637, 3136, 4186].forEach((f, i) => note(f, 0.4 + i * 0.06, 0.3, 0.06)); }
     function pop() { if (ac) note(rand(500, 800), 0, 0.08, 0.12, 'square'); }
 
     function toggleMute() {
@@ -725,7 +735,7 @@
       return recDest.stream.getAudioTracks()[0] || null;
     }
 
-    return { init, update, scream, splash, ding, bloop, fanfare, pop, toggleMute, streamTrack, isMuted: () => muted };
+    return { init, update, scream, splash, ding, bloop, fanfare, great, perfect, pop, toggleMute, streamTrack, isMuted: () => muted };
   })();
 
   // ---------- Clip recorder: each round is recorded as a vertical video ----------
@@ -1084,8 +1094,14 @@
     lastTry = { key: s.layoutKey, release: s.releaseFront, stop: stopped ? frontX() : null };
   }
 
+  // The first fall of a session plays in full; later ones are shorter (less slow motion, quicker
+  // end), so retrying after many falls never feels slow. Tapping to retry works during the fall.
+  let fallsThisSession = 0;
+  const FALL_FULL = { slow: 0.45, end: 0.9 }, FALL_SHORT = { slow: 0.2, end: 0.45 };
   function startFall() {
     rememberTry(false);
+    fallsThisSession++;
+    s.fallTiming = fallsThisSession === 1 ? FALL_FULL : FALL_SHORT;
     if (!s.friend && !s.daily) missCliff();
     s.state = 'falling';
     s.endAt = performance.now();
@@ -1147,7 +1163,7 @@
         if (big) { shake = 14; s.splashed = true; s.splashAt = s.fallT; Sound.splash(); }
       }
     }
-    if (s.splashed && s.fallT - s.splashAt > 0.9) s.state = 'fell';
+    if (s.splashed && s.fallT - s.splashAt > s.fallTiming.end) s.state = 'fell';
   }
 
   // ---------- Update ----------
@@ -1155,7 +1171,7 @@
     if (now === undefined) now = performance.now();
     // Slow motion for the first moment of a fall: the dramatic part.
     let dt = rawDt;
-    if (s.state === 'falling' && s.fallT < 0.45) dt = rawDt * 0.3;
+    if (s.state === 'falling' && s.fallT < s.fallTiming.slow) dt = rawDt * 0.3;
 
     if (s.state === 'holding' || s.state === 'sliding') {
       // Over the edge? Place the car exactly where it crossed, at its speed then.
@@ -1178,7 +1194,7 @@
         if (best === null || s.result < best) { best = s.result; save('cliff_best', best); s.newBest = true; }
         if (s.daily) {
           // The round belongs to the day it was made for; after midnight it no longer changes the new day.
-          const d = getDaily();
+          const d = loadJSON('cliff_daily') || getDaily();
           if (d.day === s.dailyDay && (d.best === null || s.result < d.best)) { d.best = s.result; s.newDailyBest = true; saveJSON('cliff_daily', d); }
         } else if (!s.friend) {
           if (s.result < s.target) {
@@ -1195,6 +1211,8 @@
           }
         }
         if (s.cleared || s.friendWin || s.newDailyBest) Sound.fanfare();
+        if (s.grade === 'GREAT') Sound.great();
+        if (s.grade === 'PERFECT') { Sound.perfect(); puff(EDGE_X - 30, GROUND_Y - 40, 18, '#ffffff', 190, 430, 4, 1.3); }
         else if (s.newBest || s.result < 10) Sound.ding();
         else Sound.bloop();
       }
@@ -1553,6 +1571,26 @@
     }
   }
 
+  // Zones: the sky changes every 5 cliffs (at each checkpoint), then the cycle repeats.
+  // Only colors and a few dots: no images, the ground and the text stay exactly as readable.
+  const ZONES = [
+    { name: 'SUNSET', sky: ['#2a1f5c', '#ff7a59', '#ffb36b'], sea: 'rgba(31,61,122,0.92)', page: ['#2a1f5c', '#ff7a59', '#ffb36b', '#1f3d7a', '#1a3468'] },
+    { name: 'DUSK',   sky: ['#1d1442', '#a8467a', '#f08a6a'], sea: 'rgba(28,46,104,0.93)', page: ['#1d1442', '#a8467a', '#f08a6a', '#1c2e68', '#17285a'] },
+    { name: 'NIGHT',  sky: ['#070a1f', '#1b2350', '#38407a'], sea: 'rgba(14,26,66,0.94)',  page: ['#070a1f', '#1b2350', '#38407a', '#0e1a42', '#0b1536'], stars: true },
+    { name: 'DAWN',   sky: ['#3d5fa8', '#e39ab8', '#ffd2a1'], sea: 'rgba(36,74,138,0.92)', page: ['#3d5fa8', '#e39ab8', '#ffd2a1', '#244a8a', '#1f4078'] },
+  ];
+  // The endless run moves through the zones; the daily and friend cliffs keep the first sky.
+  function zoneOf(st) { return st.daily || st.friend ? ZONES[0] : ZONES[Math.floor((st.cliff - 1) / CP_EVERY) % ZONES.length]; }
+  const STARS = Array.from({ length: 46 }, (_, i) => [(i * 137.5) % W, 20 + ((i * 89.3) % (H * 0.5)), i % 5 === 0 ? 3 : 2]);
+  let lastZone = ZONES[0];
+  // Side areas on wide screens follow the zone too (same layout as the CSS background).
+  function setPageSky(Z) {
+    const c = Z.page;
+    try {
+      document.body.style.backgroundImage = `linear-gradient(rgba(10, 10, 25, 0.38), rgba(10, 10, 25, 0.38)), linear-gradient(180deg, ${c[0]} 0%, ${c[1]} 60%, ${c[2]} 84.2%, ${c[3]} 84.4%, ${c[4]} 100%)`;
+    } catch (e) {}
+  }
+
   function draw() {
     // Start every frame from a clean canvas state, so nothing left over from a previous
     // frame (clip, transparency, transform) can hide the drawing.
@@ -1561,13 +1599,23 @@
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
     if (shake > 0.3) ctx.translate(rand(-shake, shake), rand(-shake, shake));
 
-    // sky (screen space)
+    // sky (screen space), changes every 5 cliffs
+    const Z = zoneOf(s);
     const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, '#2a1f5c');
-    g.addColorStop(0.6, '#ff7a59');
-    g.addColorStop(1, '#ffb36b');
+    g.addColorStop(0, Z.sky[0]);
+    g.addColorStop(0.6, Z.sky[1]);
+    g.addColorStop(1, Z.sky[2]);
     ctx.fillStyle = g;
     ctx.fillRect(-20, -20, W + 40, H + 40);
+    if (Z.stars) {
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      for (const st of STARS) ctx.fillRect(st[0], st[1], st[2], st[2]);
+      ctx.fillStyle = '#fff6d8';
+      ctx.beginPath(); ctx.arc(110, 150, 26, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = Z.sky[0];
+      ctx.beginPath(); ctx.arc(122, 142, 22, 0, Math.PI * 2); ctx.fill();
+    }
+    if (Z !== lastZone) { lastZone = Z; setPageSky(Z); }
 
     // world (camera space)
     ctx.save();
@@ -1600,7 +1648,7 @@
     if (s.parts) drawParts(); else drawCar();
 
     // sea drawn over the pieces so sinking parts look underwater
-    ctx.fillStyle = 'rgba(31,61,122,0.92)';
+    ctx.fillStyle = Z.sea;
     ctx.fillRect(-2000, WATER_Y, 6000, 3000);
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
     ctx.fillRect(-2000, WATER_Y, 6000, 3);
@@ -1655,6 +1703,7 @@
         drawHearts(W / 2, 198, s.heartsLeft, true);
       }
     } else {
+      if (s.state === 'ready' && s.cliff > 1 && isCheckpoint(s.cliff)) text(zoneOf(s).name, W / 2, 116, 16, 'rgba(255,255,255,0.8)', 800);
       text(`CLIFF ${s.cliff}`, W / 2, 150, 20, '#ffd23f', 800);
       text('UNDER ' + fmtTarget(s.target), W / 2, 194, 44, '#ffffff', 900);
       drawHearts(W / 2, 242, hearts, false);
@@ -1671,7 +1720,17 @@
     } else if (s.state === 'stopped') {
       text(fmt(s.result), W / 2, 300, 76, '#ffffff');
       if (s.friend) text(s.friendWin ? 'YOU BEAT YOUR FRIEND!' : 'YOUR FRIEND WINS', W / 2, 358, 30, s.friendWin ? '#ffd23f' : '#fff3c4', 900);
-      else if (s.daily) text(s.newDailyBest ? 'NEW BEST TODAY!' : 'BEST TODAY ' + fmt(getDaily().best), W / 2, 358, 28, s.newDailyBest ? '#ffd23f' : '#fff3c4', 800);
+      else if (s.daily) {
+        // After midnight (UTC) the round still belongs to its own day, so today's best is not shown for it.
+        const db = s.dailyDay === dayKey() ? getDaily().best : null;
+        text(s.newDailyBest ? (s.dailyDay === dayKey() ? 'NEW BEST TODAY!' : 'NEW BEST!') : db !== null ? 'BEST TODAY ' + fmt(db) : 'from the edge', W / 2, 358, 28, s.newDailyBest ? '#ffd23f' : '#fff3c4', 800);
+      }
+      else if (s.grade) {
+        // Stop quality on a cleared cliff: PERFECT < GREAT < target, so PERFECT is always also GREAT.
+        const G = { PERFECT: ['PERFECT!', 36, '#ffd23f', 900], GREAT: ['GREAT!', 32, '#ffe27a', 900], GOOD: ['GOOD', 28, '#fff3c4', 800] }[s.grade];
+        text(G[0], W / 2, 358, G[1], G[2], G[3]);
+        if (s.newBest) text('NEW BEST STOP', W / 2, 394, 18, '#ffd23f', 800);
+      }
       else text(s.newBest ? 'NEW BEST STOP!' : 'from the edge', W / 2, 358, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
       text(endHint(s.cleared ? `TAP FOR CLIFF ${cliff}` : `TAP TO RETRY CLIFF ${cliff}`, 'TAP TO PLAY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
     } else if (s.state === 'falling' || s.state === 'fell') {
