@@ -29,3 +29,18 @@ python3 src/make_covers.py src/frame_mud.png .
 node src/capture_trailer.js /tmp/frames
 sh src/make_trailers.sh /tmp/frames
 ```
+
+## Trailer v2 (branch feature/fair-precision, experimental build)
+| File | Size | Use |
+|---|---|---|
+| `trailer-portrait-1080x1920-v2.mp4` | 1080×1920, 19.6 s, H.264 30 fps, 2.7 MB | Preview video v2, portrait |
+| `trailer-landscape-1920x1080-v2.mp4` | 1920×1080, 19.6 s, H.264 30 fps, 1.3 MB | Preview video v2, landscape |
+
+Captured from the v2 build (exact release timing, new targets) under a paused clock. Sequence:
+cover (0.5 s); cliff 8 mud PERFECT 0.8 cm (result on screen at 2.2 s); cliff 9 fall and splash;
+retry with the ghost, GREAT 4.6 cm; cliff 10 ice 12 cm, CHECKPOINT SAVED (ends on a success).
+The first trailers above are unchanged.
+```
+node src/capture_trailer_v2.js /tmp/frames2
+sh src/make_trailers_v2.sh /tmp/frames2
+```
