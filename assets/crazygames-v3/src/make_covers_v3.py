@@ -95,8 +95,8 @@ def cover(W, H, k, edge_x, band_top, sea_y, title_xy, title_size, align='left'):
 
 
 cover(1920, 1080, k=0.78, edge_x=1450, band_top=0, sea_y=985, title_xy=(110, 300), title_size=230).save(out + '/cover-landscape-1920x1080.png', optimize=True)
-cover(800, 1200, k=0.74, edge_x=560, band_top=300, sea_y=1125, title_xy=(400, 52), title_size=150, align='center').save(out + '/cover-portrait-800x1200.png', optimize=True)
-cover(800, 800, k=0.56, edge_x=540, band_top=40, sea_y=748, title_xy=(40, 520), title_size=104).save(out + '/cover-square-800x800.png', optimize=True)
+cover(800, 1200, k=0.74, edge_x=560, band_top=380, sea_y=1125, title_xy=(400, 130), title_size=150, align='center').save(out + '/cover-portrait-800x1200.png', optimize=True)   # top-left corner kept clear for CrazyGames labels
+cover(800, 800, k=0.56, edge_x=540, band_top=190, sea_y=748, title_xy=(40, 520), title_size=104).save(out + '/cover-square-800x800.png', optimize=True)   # boss cloud below the label zone
 cover(1080, 1920, k=1.0, edge_x=727, band_top=380, sea_y=1840, title_xy=(540, 110), title_size=200, align='center').save(out + '/src/trailer-end-portrait.png')
 cover(1920, 1080, k=0.78, edge_x=1450, band_top=0, sea_y=985, title_xy=(110, 300), title_size=230).save(out + '/src/trailer-end-landscape.png')
 print('covers written to', out)
