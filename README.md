@@ -27,8 +27,6 @@
 | `archive/trailers-v3-draft` | أول فيديوهات V3 (استُبدلت) | ❌ لا |
 | `games/merge-anything`, `research/ideas` | لعبة ثانية، وبحث | ❌ ليس الآن |
 
-الفرعان القديمان `ccr-48f66870-83edzy` و`ccr-6870ac83-7jmi02` نسختان من الفرعين `games/merge-anything` و`research/ideas` بأسماء آلية. حذفهما يحتاج إذناً من صاحب المشروع.
-
 ## المجلدات
 
 | المجلد | ما فيه |
