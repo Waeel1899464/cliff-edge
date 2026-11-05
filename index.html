@@ -2081,11 +2081,11 @@
       if (lastTry.release !== null) {
         const x = lastTry.release * PPM;
         ctx.strokeStyle = 'rgba(255,210,63,0.95)'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
-        ctx.beginPath(); ctx.moveTo(x, top - 46); ctx.lineTo(x, top); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x, top - 68); ctx.lineTo(x, top); ctx.stroke();
         ctx.setLineDash([]);
         ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
         ctx.fillStyle = '#ffd23f';
-        ctx.fillText('LET GO', x, top - 54);
+        ctx.fillText('LAST RELEASE', x, top - 76);     // where you let go on your previous try (above LAST STOP)
       }
       if (lastTry.stop !== null) {
         const len = CAR_LEN * PPM, x = lastTry.stop * PPM - len;
@@ -2093,7 +2093,7 @@
         ctx.beginPath(); ctx.roundRect(x, top - WHEEL_R * 2 - CAR_H - 2, len, CAR_H + WHEEL_R * 2 + 2, 10); ctx.fill();
         ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
         ctx.fillStyle = 'rgba(255,255,255,0.9)';
-        ctx.fillText('LAST', x + len / 2, top - WHEEL_R * 2 - CAR_H - 12);
+        ctx.fillText('LAST STOP', x + len / 2, top - WHEEL_R * 2 - CAR_H - 12);
       }
     }
     ctx.restore();
