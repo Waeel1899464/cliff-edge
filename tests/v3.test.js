@@ -35,10 +35,10 @@ const seed = (cur, cp, best, extra = '') => IN_PAGE + HELP + `localStorage.setIt
       const out = [];
       for (const [cur, cp] of [[13, 11], [11, 11], [20, 16], [31, 31], [45, 41], [50, 46]]) {
         const { page, ctx } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(cur, cp, cur) });
-        const r = await page.evaluate(() => { for (let k = 0; k < 3; k++) { window.__play(-999); window.__next(); } return window.__cliff().cliff; });
+        const r = await page.evaluate(() => { const c0 = window.__cliff().cliff; for (let k = 0; k < 6 && window.__cliff().cliff === c0 && !window.__cliff().backTo; k++) { window.__play(-999); window.__next(); } return window.__cliff().cliff; });
         out.push([cur, r]); await ctx.close();
       }
-      check('losing all 3 hearts goes back to a checkpoint in the same world, never an earlier world',
+      check('losing all hearts (3, or 4 in a boss battle) goes back to a checkpoint in the same world, never an earlier world',
         out.every(([c, r]) => Math.ceil(c / 10) === Math.ceil(r / 10) && r <= c), out.map(([c, r]) => c + '→' + r).join(' '));
     }
 

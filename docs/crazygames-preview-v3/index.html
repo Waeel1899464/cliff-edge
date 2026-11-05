@@ -415,11 +415,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       spec({ si: 0, dist: 12, vmax: 7.5, wind: 0.6 }),              // 13 first tail wind: slides further
       spec({ si: 3, dist: 12, vmax: 8,   wind: -0.8 }),             // 14 sand with a head wind
       spec({ si: 2, dist: 11, vmax: 8,   wind: 0.8 }),              // 15 mud pushed by a tail wind
-      spec({ si: 3, dist: 12, vmax: 7,   wind: 0.5 }),              // 16 checkpoint: gentle tail wind on sand
-      spec({ si: 1, dist: 12, vmax: 6.5, wind: -0.6 }),             // 17 ice, the head wind helps you stop
-      spec({ si: 0, dist: 13, vmax: 8.5, wind: 1.0 }),              // 18 strong tail wind on road
-      spec({ si: 3, dist: 13, vmax: 9,   wind: -1.0 }),             // 19 strong head wind, fast sand
-      spec({ si: 3, dist: 14, vmax: 8.5, wind: 1.2, fog: 0.3, boss: true }),   // 20 BOSS sandstorm: strongest tail wind, blowing sand
+      // Boss battle (16-20): THE SANDSTORM circles you; its wind grows every phase, sand fills the air.
+      spec({ si: 3, dist: 12, vmax: 7,   wind: 0.5 }),                         // 16 phase 1 (checkpoint): gentle tail wind on sand
+      spec({ si: 1, dist: 12, vmax: 6.5, wind: -0.7 }),                        // 17 phase 2: ice, a head wind
+      spec({ si: 0, dist: 13, vmax: 8.5, wind: 0.9, fog: 0.15 }),              // 18 phase 3: strong tail wind, sand in the air
+      spec({ si: 3, dist: 13, vmax: 9,   wind: -1.0, fog: 0.2 }),              // 19 phase 4: strong head wind, fast sand
+      spec({ si: 3, dist: 14, vmax: 8.5, wind: 1.2, fog: 0.3, boss: true }),   // 20 phase 5, final hit: strongest tail wind
       // World 3: Snow Mountain — the ground changes on the way (painted on the road and named on the
       // cliff face) and fog (the edge shows only when you get close; the distance counter stays).
       spec({ si: 0, dist: 11, vmax: 7, patches: [{ at: 9, si: 1 }] }),                         // 21 checkpoint: last 2 m are ice
@@ -427,10 +428,11 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       spec({ si: 0, dist: 11, vmax: 7, fog: 0.6 }),                                            // 23 first fog, plain road
       spec({ si: 1, dist: 12, vmax: 6.5, patches: [{ at: 10, si: 2 }] }),                      // 24 ice, a mud strip before the edge
       spec({ si: 0, dist: 12, vmax: 7.5, patches: [{ at: 9.5, si: 1 }] }),                     // 25 road, ice from 9.5 m
-      spec({ si: 1, dist: 12, vmax: 6, fog: 0.4, patches: [{ at: 10, si: 0 }] }),              // 26 checkpoint: ice to road, light fog
-      spec({ si: 0, dist: 13, vmax: 8, patches: [{ at: 7, si: 1 }, { at: 10, si: 2 }] }),      // 27 road, ice, then mud
-      spec({ si: 1, dist: 13, vmax: 7, fog: 0.8 }),                                            // 28 ice in thick fog
-      spec({ si: 0, dist: 13, vmax: 7.5, fog: 0.5, patches: [{ at: 10.5, si: 1 }] }),          // 29 road to ice, in fog
+      // Boss battle (26-30): THE BLIZZARD; the sky darkens and the fog thickens every phase, night at the end.
+      spec({ si: 1, dist: 12, vmax: 6, fog: 0.3, patches: [{ at: 10, si: 0 }] }),              // 26 phase 1 (checkpoint): ice to road, light fog
+      spec({ si: 0, dist: 13, vmax: 8, fog: 0.45, patches: [{ at: 7, si: 1 }, { at: 10, si: 2 }] }),   // 27 phase 2: road, ice, then mud
+      spec({ si: 1, dist: 13, vmax: 7, fog: 0.6 }),                                            // 28 phase 3: dusk, ice in fog
+      spec({ si: 0, dist: 13, vmax: 7.5, fog: 0.7, patches: [{ at: 11, si: 1 }] }),            // 29 phase 4: dusk, road to ice, thick fog
       spec({ si: 0, dist: 14, vmax: 8.5, fog: 1.0, patches: [{ at: 10.5, si: 1 }, { at: 12.5, si: 0 }], boss: true }),   // 30 BOSS: night, thick fog, an ice strip
       // World 4: Moon — low gravity (gs 0.4): weaker grip, so the car slides much further; longer roads.
       // No wind on the Moon (no air). Earlier twists come back: slopes and ground changes.
@@ -439,10 +441,11 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       spec({ si: 3, dist: 16, vmax: 7,   gs: 0.4 }),                                           // 33 moon sand
       spec({ si: 2, dist: 16, vmax: 7.5, gs: 0.4, slope: 0.05 }),                              // 34 crater slope
       spec({ si: 0, dist: 20, vmax: 7,   gs: 0.4, patches: [{ at: 17, si: 3 }] }),             // 35 road, then sand
-      spec({ si: 3, dist: 17, vmax: 6.5, gs: 0.4 }),                                           // 36 checkpoint: sand
-      spec({ si: 0, dist: 22, vmax: 7.5, gs: 0.4, patches: [{ at: 19, si: 2 }] }),             // 37 a mud strip before the edge
-      spec({ si: 2, dist: 18, vmax: 8,   gs: 0.4, slope: 0.06 }),                              // 38 steeper crater slope
-      spec({ si: 0, dist: 22, vmax: 8,   gs: 0.4, patches: [{ at: 19.5, si: 1 }] }),           // 39 icy crater rim
+      // Boss battle (36-40): THE CRATER MONSTER pulls you in; the crater slope grows every phase.
+      spec({ si: 3, dist: 17, vmax: 6.5, gs: 0.4, slope: 0.02 }),                              // 36 phase 1 (checkpoint): sand, slight slope
+      spec({ si: 0, dist: 22, vmax: 7.5, gs: 0.4, slope: 0.03, patches: [{ at: 19, si: 2 }] }),   // 37 phase 2: a mud strip before the edge
+      spec({ si: 2, dist: 18, vmax: 8,   gs: 0.4, slope: 0.04 }),                              // 38 phase 3: steeper
+      spec({ si: 0, dist: 22, vmax: 8,   gs: 0.4, slope: 0.045, patches: [{ at: 19.5, si: 1 }] }),   // 39 phase 4: icy crater rim
       spec({ si: 3, dist: 24, vmax: 8.5, gs: 0.4, slope: 0.06, patches: [{ at: 20, si: 0 }], boss: true }),   // 40 BOSS: the big crater run
       // World 5: Volcano — the edge crumbles: when the car front passes a red line on the road, the
       // cracked piece at the edge breaks off (the edge moves closer). Cracks and lines are drawn, the
@@ -452,10 +455,11 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       spec({ si: 2, dist: 12, vmax: 8,   crumble: [{ at: 9.5, len: 0.4 }, { at: 10.5, len: 0.4 }] }),        // 43 two pieces on mud
       spec({ si: 0, dist: 12, vmax: 7.5, quake: 0.5 }),                                                      // 44 first earthquake
       spec({ si: 3, dist: 13, vmax: 8,   wind: 0.6, crumble: [{ at: 10, len: 0.4 }, { at: 11, len: 0.4 }] }),   // 45 hot wind, two pieces
-      spec({ si: 0, dist: 12, vmax: 7,   crumble: [{ at: 10, len: 0.5 }] }),                                 // 46 checkpoint
-      spec({ si: 1, dist: 13, vmax: 7,   crumble: [{ at: 10, len: 0.5 }] }),                                 // 47 ice and a crumbling edge
-      spec({ si: 0, dist: 14, vmax: 8.5, slope: 0.06, crumble: [{ at: 11, len: 0.4 }, { at: 12, len: 0.4 }] }),   // 48 downhill to a crumbling edge
-      spec({ si: 2, dist: 13, vmax: 8.5, quake: 0.6, fog: 0.3, crumble: [{ at: 10.5, len: 0.5 }] }),        // 49 earthquake in the smoke
+      // Boss battle (46-50): THE ANGRY VOLCANO; it shakes harder and breaks more of the edge every phase.
+      spec({ si: 0, dist: 12, vmax: 7,   quake: 0.2, crumble: [{ at: 10, len: 0.5 }] }),                     // 46 phase 1 (checkpoint)
+      spec({ si: 1, dist: 13, vmax: 7,   quake: 0.3, crumble: [{ at: 10, len: 0.5 }] }),                     // 47 phase 2: ice
+      spec({ si: 0, dist: 14, vmax: 8.5, quake: 0.4, slope: 0.06, crumble: [{ at: 11, len: 0.4 }, { at: 12, len: 0.4 }] }),   // 48 phase 3: downhill
+      spec({ si: 2, dist: 13, vmax: 8.5, quake: 0.6, fog: 0.3, crumble: [{ at: 10, len: 0.4 }, { at: 11, len: 0.4 }] }),     // 49 phase 4: smoke, two pieces
       spec({ si: 0, dist: 15, vmax: 8.5, wind: -0.6, slope: 0.05, fog: 0.4, quake: 0.8,                      // 50 FINAL BOSS: everything at once
              patches: [{ at: 10.5, si: 1 }, { at: 12.5, si: 0 }], crumble: [{ at: 12.6, len: 0.4 }, { at: 13.6, len: 0.4 }], boss: true }),
     ];
@@ -568,7 +572,13 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   const MAX_HEARTS = 5;      // up to 4 in a boss battle, + 1 golden heart (earned with a 3-star stop)
   // Boss battles: the second half of a world (cliffs 6-10) is one fight against the world's boss,
   // in 5 phases. You get 4 hearts there instead of 3 (same targets, same physics: one more chance).
-  const BOSSES = { 1: { name: 'THE GIANT HILL', kind: 'hill' } };
+  const BOSSES = {
+    1: { name: 'THE GIANT HILL', kind: 'hill' },
+    2: { name: 'THE SANDSTORM', kind: 'cloud', body: '#e3b673', dark: '#c99752', ink: '#5a3a12' },
+    3: { name: 'THE BLIZZARD', kind: 'cloud', body: '#9fb2d6', dark: '#7d93ba', ink: '#1d2a48', snow: true },
+    4: { name: 'THE CRATER MONSTER', kind: 'crater' },
+    5: { name: 'THE ANGRY VOLCANO', kind: 'volcano' },
+  };
   const inArena = n => !!BOSSES[Math.floor((n - 1) / 10) + 1] && (n - 1) % 10 >= 5;
   const arenaPhase = n => (n - 1) % 10 - 4;                       // 1..5
   const baseHearts = n => inArena(n) ? 4 : HEARTS;
@@ -2043,9 +2053,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   // Story mode uses the world's look; the daily and friend cliffs keep the original sunset.
   const SNOW_NIGHT = { name: 'SNOW NIGHT', sky: ['#05081a', '#141c3c', '#2c3866'], sea: 'rgba(16,28,64,0.95)', foam: 'rgba(255,255,255,0.3)', bg: 'peaks', stars: true,
     far: '#2c3a5c', near: '#1f2a46', page: ['#05081a', '#141c3c', '#2c3866', '#101c40', '#0c1634'] };
+  const SNOW_DUSK = { name: 'SNOW DUSK', sky: ['#2c3561', '#5d6a9c', '#a7b3d6'], sea: 'rgba(26,44,92,0.94)', foam: 'rgba(255,255,255,0.35)', bg: 'peaks',
+    far: '#6f7fa6', near: '#56668d', page: ['#2c3561', '#5d6a9c', '#a7b3d6', '#1a2c5c', '#16264e'] };
   function zoneOf(st) {
     if (st.daily || st.friend) return ZONES[0];
     if (st.world === 3 && st.spec && st.spec.boss) return SNOW_NIGHT;      // the snow boss is at night
+    if (st.world === 3 && inArena(st.cliff) && arenaPhase(st.cliff) >= 3) return SNOW_DUSK;   // the blizzard darkens the sky
     return WORLD_LOOKS[(st.world || 1) - 1];
   }
   // Far backdrop behind the cliff and the sea (screen space, does not move with the camera).
@@ -2065,7 +2078,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
         ctx.lineTo(x + w * 0.28, top + (base - top) * 0.28); ctx.lineTo(x + w * 0.1, top + (base - top) * 0.22); ctx.lineTo(x - w * 0.08, top + (base - top) * 0.3); ctx.closePath(); ctx.fill();
       });
       ridge(25, 0.02, 3, 780, Z.near);
-    } else if (Z.bg === 'volcano') {
+    } else if (Z.bg === 'volcano' && !(inArena(s.cliff) && s.world === 5 && !s.daily && !s.friend)) {
       ctx.fillStyle = Z.far; ctx.beginPath(); ctx.moveTo(200, base); ctx.lineTo(360, 500); ctx.lineTo(420, 500); ctx.lineTo(580, base); ctx.closePath(); ctx.fill();
       ctx.fillStyle = 'rgba(255,140,40,0.85)'; ctx.fillRect(362, 496, 56, 6);
       ctx.fillStyle = 'rgba(60,30,30,0.5)';
@@ -2073,8 +2086,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       ridge(28, 0.017, 2, 775, Z.near);
     } else if (Z.bg === 'moon') {
       // the Earth, low in the sky on the right, clear of the text at the top
-      ctx.fillStyle = '#3d7bd9'; ctx.beginPath(); ctx.arc(450, 450, 34, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#52b06a'; ctx.beginPath(); ctx.arc(439, 442, 12, 0, Math.PI * 2); ctx.arc(462, 462, 9, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#3d7bd9'; ctx.beginPath(); ctx.arc(92, 420, 30, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#52b06a'; ctx.beginPath(); ctx.arc(82, 413, 11, 0, Math.PI * 2); ctx.arc(103, 431, 8, 0, Math.PI * 2); ctx.fill();
       ridge(22, 0.015, 1, 770, Z.far);
     }
   }
@@ -2109,14 +2122,15 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function drawFog() {
     const view = (8 - 4 * s.spec.fog) * PPM, fade = 1.6 * PPM, x = frontX() * PPM + view;
     const night = s.spec.boss && s.world === 3;
-    const c = night ? '24,30,58' : s.world === 5 ? '74,44,40' : '226,234,246';
+    const dusk = s.world === 3 && inArena(s.cliff) && arenaPhase(s.cliff) >= 3;
+    const c = night ? '24,30,58' : dusk ? '96,108,150' : s.world === 5 ? '74,44,40' : '226,234,246';
     const g = ctx.createLinearGradient(x - fade, 0, x, 0);
     g.addColorStop(0, `rgba(${c},0)`); g.addColorStop(1, `rgba(${c},0.96)`);
     ctx.fillStyle = g; ctx.fillRect(x - fade, -2000, fade, 5000);
     ctx.fillStyle = `rgba(${c},0.96)`; ctx.fillRect(x, -2000, 4000, 5000);
   }
   // Blowing sand over the world on the sandstorm cliff (light, the edge stays readable)
-  function drawStormHaze() { ctx.fillStyle = 'rgba(236,190,120,0.2)'; ctx.fillRect(0, 0, W, H); }
+  function drawStormHaze() { ctx.fillStyle = `rgba(236,190,120,${Math.min(0.24, 0.65 * s.spec.fog)})`; ctx.fillRect(0, 0, W, H); }   // more sand, more haze
 
   // Crumbling edge, readable before you drive: each piece that will break has a glowing crack at
   // its inner side, and a red line on the road shows where your car makes it break.
@@ -2235,35 +2249,70 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     const hit = s.state === 'stopped' && s.cleared && now - s.endAt < 700;
     const down = s.worldDone && s.state === 'stopped' ? Math.min(1, (now - s.endAt) / 1400) : 0;
     const shakeX = hit ? Math.sin(now / 25) * 8 * (1 - (now - s.endAt) / 700) : 0;
-    const cx = 455 + shakeX, top = 380 + down * 330, base = WATER_Y;
-    if (B.kind === 'hill') {
-      ctx.fillStyle = '#3e8c4a';
+    const mood = down > 0 ? 'down' : hit ? 'hit' : ['sleep', 'peek', 'awake', 'angry', 'furious'][ph - 1];
+    const base = WATER_Y;
+    if (B.kind === 'hill' || B.kind === 'crater') {
+      const cx = 455 + shakeX, top = 380 + down * 330;
+      ctx.fillStyle = B.kind === 'hill' ? '#3e8c4a' : '#4a4d66';
       ctx.beginPath(); ctx.moveTo(cx - 230, base);
       ctx.bezierCurveTo(cx - 170, top - 40, cx + 170, top - 40, cx + 230, base); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.10)';
-      ctx.beginPath(); ctx.ellipse(cx - 40, top + 40, 70, 22, -0.2, 0, Math.PI * 2); ctx.fill();
-      const ey = top + 78, mood = down > 0 ? 'down' : hit ? 'hit' : ['sleep', 'peek', 'awake', 'angry', 'furious'][ph - 1];
-      ctx.strokeStyle = '#173a1e'; ctx.fillStyle = '#173a1e'; ctx.lineWidth = 5; ctx.lineCap = 'round';
-      for (const ex of [cx - 36, cx + 36]) {
-        if (mood === 'sleep') { ctx.beginPath(); ctx.arc(ex, ey, 11, 0.1, Math.PI - 0.1); ctx.stroke(); }
-        else if (mood === 'down' || mood === 'hit') { ctx.beginPath(); ctx.moveTo(ex - 9, ey - 9); ctx.lineTo(ex + 9, ey + 9); ctx.moveTo(ex + 9, ey - 9); ctx.lineTo(ex - 9, ey + 9); ctx.stroke(); }
-        else {
-          const open = mood === 'peek' ? (ex < cx ? 4 : 11) : 12;
-          ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.ellipse(ex, ey, 12, open, 0, 0, Math.PI * 2); ctx.fill();
-          ctx.fillStyle = '#173a1e'; ctx.beginPath(); ctx.arc(ex + (ex < cx ? 3 : -3), ey + 2, Math.min(5, open), 0, Math.PI * 2); ctx.fill();
-          if (mood === 'angry' || mood === 'furious') {    // angry brows
-            ctx.beginPath(); ctx.moveTo(ex - 16, ey - (ex < cx ? 22 : 12)); ctx.lineTo(ex + 16, ey - (ex < cx ? 12 : 22)); ctx.stroke();
-          }
-        }
+      if (B.kind === 'crater') {       // crater dents on the monster
+        ctx.fillStyle = '#373a50';
+        [[-90, 70, 18], [70, 120, 14], [-20, 150, 10], [110, 50, 9]].forEach(([dx, dy, r]) => { ctx.beginPath(); ctx.ellipse(cx + dx, top + dy, r * 1.4, r, 0, 0, Math.PI * 2); ctx.fill(); });
+      } else { ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.beginPath(); ctx.ellipse(cx - 40, top + 40, 70, 22, -0.2, 0, Math.PI * 2); ctx.fill(); }
+      drawBossFace(cx, top + 78, mood, B.kind === 'hill' ? '#173a1e' : '#14152a', B.kind === 'crater');
+    } else if (B.kind === 'cloud') {
+      // the storm cloud sits on the side the wind comes from (it blows the real wind of this phase)
+      const left = (s.spec.wind || 0) >= 0;
+      const cx = (left ? 120 : 425) + shakeX, cy = 380 - down * 120;
+      ctx.save(); ctx.globalAlpha = 1 - down;
+      const puffs = [[-60, 12, 42], [-20, -18, 52], [30, -10, 50], [70, 14, 40], [0, 22, 48]];
+      ctx.fillStyle = B.dark; puffs.forEach(([dx, dy, r]) => { ctx.beginPath(); ctx.arc(cx + dx, cy + dy + 6, r, 0, Math.PI * 2); ctx.fill(); });
+      ctx.fillStyle = B.body; puffs.forEach(([dx, dy, r]) => { ctx.beginPath(); ctx.arc(cx + dx, cy + dy, r, 0, Math.PI * 2); ctx.fill(); });
+      drawBossFace(cx, cy - 4, mood, B.ink, false);
+      if (mood !== 'sleep' && mood !== 'down') {    // blowing: puffed lips and gust lines toward the wind direction
+        const dir = left ? 1 : -1;
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+        for (let i = 0; i < 3; i++) { const y = cy + 30 + i * 12, x0 = cx + dir * (60 + ((now / 6 + i * 30) % 60)); ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0 + dir * 26, y); ctx.stroke(); }
       }
-      // mouth
-      ctx.beginPath();
-      if (mood === 'sleep') { ctx.arc(cx, ey + 34, 6, 0, Math.PI * 2); ctx.stroke(); text('z', cx + 70, ey - 40 - (now / 40 % 20), 22, '#ffffff', 900); }
-      else if (mood === 'furious') { ctx.moveTo(cx - 22, ey + 40); ctx.lineTo(cx - 8, ey + 32); ctx.lineTo(cx + 8, ey + 40); ctx.lineTo(cx + 22, ey + 32); ctx.stroke(); }
-      else if (mood === 'down' || mood === 'hit') { ctx.ellipse(cx, ey + 38, 14, 9, 0, 0, Math.PI * 2); ctx.stroke(); }
-      else { ctx.arc(cx, ey + 46, 16, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke(); }
-      if (mood === 'furious') { ctx.fillStyle = 'rgba(255,90,90,0.5)'; ctx.beginPath(); ctx.arc(cx - 62, ey + 22, 12, 0, Math.PI * 2); ctx.arc(cx + 62, ey + 22, 12, 0, Math.PI * 2); ctx.fill(); }
+      if (B.snow) { ctx.fillStyle = '#ffffff'; for (let i = 0; i < 14; i++) { const x = cx - 80 + ((i * 37) % 160), y = cy + 50 + ((now / 8 + i * 47) % 220); ctx.fillRect(x, y, 3, 3); } }
+      ctx.restore();
+    } else if (B.kind === 'volcano') {
+      const cx = 390 + shakeX, top = 420 + down * 360;
+      ctx.fillStyle = '#3a1716'; ctx.beginPath(); ctx.moveTo(cx - 200, base); ctx.lineTo(cx - 40, top); ctx.lineTo(cx + 40, top); ctx.lineTo(cx + 200, base); ctx.closePath(); ctx.fill();
+      const glow = 0.5 + 0.1 * ph + 0.15 * Math.sin(now / 120);
+      ctx.fillStyle = `rgba(255,140,40,${Math.min(1, glow)})`; ctx.fillRect(cx - 38, top - 4, 76, 7);
+      if (!down) {   // smoke grows with every phase
+        ctx.fillStyle = 'rgba(70,40,40,0.55)';
+        for (let i = 0; i < 2 + ph; i++) { ctx.beginPath(); ctx.arc(cx + Math.sin(i * 1.7 + now / 900) * 14, top - 30 - i * 30, 14 + i * 6, 0, Math.PI * 2); ctx.fill(); }
+      }
+      drawBossFace(cx, top + 70, mood, '#ffb347', false);
     }
+  }
+  // one face for every boss: asleep, peeking, awake, angry, furious, hit (X eyes), down (dizzy)
+  function drawBossFace(cx, ey, mood, ink, teeth) {
+    ctx.save();
+    ctx.strokeStyle = ink; ctx.fillStyle = ink; ctx.lineWidth = 5; ctx.lineCap = 'round';
+    for (const ex of [cx - 36, cx + 36]) {
+      if (mood === 'sleep') { ctx.beginPath(); ctx.arc(ex, ey, 11, 0.1, Math.PI - 0.1); ctx.stroke(); }
+      else if (mood === 'down' || mood === 'hit') { ctx.beginPath(); ctx.moveTo(ex - 9, ey - 9); ctx.lineTo(ex + 9, ey + 9); ctx.moveTo(ex + 9, ey - 9); ctx.lineTo(ex - 9, ey + 9); ctx.stroke(); }
+      else {
+        const open = mood === 'peek' ? (ex < cx ? 4 : 11) : 12;
+        ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.ellipse(ex, ey, 12, open, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#1a1a24'; ctx.beginPath(); ctx.arc(ex + (ex < cx ? 3 : -3), ey + 2, Math.min(5, open), 0, Math.PI * 2); ctx.fill();
+        if (mood === 'angry' || mood === 'furious') { ctx.beginPath(); ctx.moveTo(ex - 16, ey - (ex < cx ? 22 : 12)); ctx.lineTo(ex + 16, ey - (ex < cx ? 12 : 22)); ctx.stroke(); }
+      }
+    }
+    ctx.beginPath();
+    if (mood === 'sleep') { ctx.arc(cx, ey + 34, 6, 0, Math.PI * 2); ctx.stroke(); text('z', cx + 70, ey - 40 - (performance.now() / 40 % 20), 22, '#ffffff', 900); }
+    else if (mood === 'furious') {
+      ctx.moveTo(cx - 22, ey + 40); ctx.lineTo(cx - 8, ey + 32); ctx.lineTo(cx + 8, ey + 40); ctx.lineTo(cx + 22, ey + 32); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,90,90,0.5)'; ctx.beginPath(); ctx.arc(cx - 62, ey + 22, 12, 0, Math.PI * 2); ctx.arc(cx + 62, ey + 22, 12, 0, Math.PI * 2); ctx.fill();
+    }
+    else if (mood === 'down' || mood === 'hit') { ctx.ellipse(cx, ey + 38, 14, 9, 0, 0, Math.PI * 2); ctx.stroke(); }
+    else { ctx.arc(cx, ey + 46, 16, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke(); }
+    if (teeth && (mood === 'angry' || mood === 'furious')) { ctx.fillStyle = '#ffffff'; ctx.fillRect(cx - 12, ey + 31, 7, 7); ctx.fillRect(cx + 5, ey + 31, 7, 7); }
+    ctx.restore();
   }
   // Short intro when a boss battle starts (any tap still starts driving at once).
   function drawBossIntro() {
@@ -2555,7 +2604,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
         text(`Replay done · back to ${cliffLabel(cliff)}`, W / 2, 196, 22, '#fff3c4', 800);
       } else if (s.worldDone && BOSSES[s.world]) {
         text(`${BOSSES[s.world].name} IS DOWN!`, W / 2, 150, 32, '#7ef9ff', 900);
-        text(`World ${s.world} complete · next: ${Physics.WORLDS[Math.min(4, s.world)].name}`, W / 2, 196, 20, '#fff3c4', 800);
+        text(s.world >= 5 ? 'ALL 5 WORLDS COMPLETE!' : `World ${s.world} complete · next: ${Physics.WORLDS[s.world].name}`, W / 2, 196, 20, s.world >= 5 ? '#ffd23f' : '#fff3c4', 800);
       } else if (inArena(s.cliff) && !s.replay) {
         text('HIT!', W / 2, 140, 40, '#ffd23f', 900);
         drawBossBar(W / 2, 184, 5 - arenaPhase(s.cliff), true);
