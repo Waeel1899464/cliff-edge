@@ -90,6 +90,19 @@ function numeric(tau, sp) {
     check(`all ${P.CLIFFS.length} story cliffs: the car can always stop, triggers are fair, release > 0.4 s, target 0.5–100 cm`, bad.length === 0, bad.join('; '));
   }
 
+  // ---- Endless: every generated cliff is fair (checked over many runs) and sized to its goal ----
+  {
+    let bad = [], n = 0;
+    for (let seed = 1; seed <= 60; seed++) for (let i = 0; i < 40; i++) {
+      const sp = P.endlessSpec('t' + seed, i); n++;
+      if (!P.endlessValid(sp)) bad.push(seed + '/' + i);
+      const T = P.endlessTarget(i, sp);
+      if (!(T >= 0.5 && T < 100)) bad.push(seed + '/' + i + ' T' + T);
+    }
+    const again = JSON.stringify(P.endlessSpec('t7', 12)) === JSON.stringify(P.endlessSpec('t7', 12));
+    check(`Endless: ${n} generated cliffs are all fair (can stop, fair crumbling lines, target < 1 m); same seed = same cliff`, bad.length === 0 && again, bad.slice(0, 5).join(' '));
+  }
+
   // ---- the boss cliff in the real game: same result at 30/60/120/144 Hz ----
   const srv = await serve(8794);
   const browser = await chromium.launch();

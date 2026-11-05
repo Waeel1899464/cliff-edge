@@ -259,6 +259,47 @@ const seed = (cur, cp, best, extra = '') => IN_PAGE + HELP + `localStorage.setIt
       check('boss battle lost: back to phase 1 with 4 hearts, and the intro again', r.back);
       await ctx.close();
     }
+    // ---- after cliff 50: celebration, then Endless ----
+    {
+      const { page, ctx, errors } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(50, 46, 50) });
+      const r = await page.evaluate(() => {
+        const out = {}, k = n => localStorage.getItem('cg3_cliff_' + n);
+        let s = window.__play(window.__cliff().target * 0.4);
+        const s50 = window.__cliff();
+        out.allDone = s50.worldDone && s50.allDone && s50.cleared;
+        window.__next();
+        s = window.__cliff();
+        out.endlessStart = s.endless && s.state === 'ready' && k('cur') === '51';
+        // clear 3 endless cliffs, then miss: run over, best saved
+        for (let i = 0; i < 3; i++) { window.__play(window.__cliff().target * 0.4); window.__next(); }
+        s = window.__cliff();
+        out.streak = s.endless && s.cliff === 1003;
+        const before = localStorage.getItem('cg3_cliff_hearts');
+        window.__play(window.__cliff().target + 5);
+        s = window.__cliff();
+        out.runOver = s.runOver && s.runScore === 3 && k('endless_best') === '3' && localStorage.getItem('cg3_cliff_hearts') === before && !s.rescue;
+        window.__next();
+        s = window.__cliff();
+        out.newRun = s.endless && s.cliff === 1000 && s.state === 'ready';
+        // a fall also ends the run, and still no rescue
+        window.__play(-999); for (let i = 0; i < 5; i++) window.__frame(16);
+        out.fallEnds = window.__cliff().runOver && !window.__cliff().rescue;
+        window.__next();
+        // map: PLAY ENDLESS continues Endless; replaying a story cliff then returns to Endless
+        window.__tap(74, 120); window.__tap(52 + 2 * 48.4, 212);
+        out.replayFromEndless = window.__cliff().replay && window.__cliff().cliff === 3;
+        window.__play(window.__cliff().target * 0.4); window.__next();
+        out.backToEndless = window.__cliff().endless;
+        return out;
+      });
+      check('final boss: ALL WORLDS COMPLETE, then the next tap starts Endless', r.allDone && r.endlessStart);
+      check('Endless: the score counts cliffs cleared in a row', r.streak);
+      check('Endless: a miss ends the run (no hearts, no rescue), best saved; next tap = new run', r.runOver && r.newRun);
+      check('Endless: a fall also ends the run, no rescue', r.fallEnds);
+      check('Endless: the map still allows story replays, then back to Endless', r.replayFromEndless && r.backToEndless);
+      check('no page errors (Endless)', errors.length === 0, errors.join(' | '));
+      await ctx.close();
+    }
   } finally { await b.close(); srv.close(); }
   process.exit(summary() ? 1 : 0);
 })();

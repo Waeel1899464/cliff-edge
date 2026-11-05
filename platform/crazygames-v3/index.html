@@ -471,11 +471,59 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     }
     function storyTarget(n, sp) { return targetS(storyGoal(n, sp), sp); }
 
+    // ---- Endless (after cliff 50): new cliffs mixing every twist, slowly harder ----
+    // Each run has its own seed; cliff i of a run is the same for anyone with that seed (the
+    // simulator replays it exactly). Every candidate is checked before it is used: the car can
+    // always stop, crumbling lines are fair, the release is not too early and the target fits the
+    // intended chance of success. Unfit candidates are skipped (not shown).
+    function endlessGoal(i) { return i < 3 ? 0.6 : Math.max(0.25, 0.6 - 0.35 * Math.min(1, (i - 3) / 30)); }
+    function prng(key) {
+      let h = 2166136261;
+      for (const ch of key) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+      let a = h >>> 0;
+      return () => { a = (a + 0x6D2B79F5) >>> 0; let x = a; x = Math.imul(x ^ (x >>> 15), x | 1); x ^= x + Math.imul(x ^ (x >>> 7), x | 61); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
+    }
+    function endlessValid(sp) {
+      for (const g of segments(sp)) if (!(g.c > 0.25)) return false;
+      let E = sp.dist;
+      for (const c of sp.crumble.slice().sort((a, b) => a.at - b.at)) { E -= c.len; if (c.at > E - 0.3) return false; }
+      return releaseS(0, sp) > 0.5;
+    }
+    function endlessSpec(seed, i) {
+      const twists = i < 3 ? 0 : i < 10 ? 1 : i < 20 ? 2 : 3;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const r = prng(`endless-${seed}-${i}-${attempt}`);
+        const pick = arr => arr[Math.floor(r() * arr.length)];
+        const o = { si: Math.floor(r() * 4), dist: Math.round((10 + r() * 4) * 10) / 10, vmax: Math.round((6 + r() * 3) * 10) / 10 };
+        const pool = ['wind', 'slope', 'patch', 'crumble', 'moon', 'fog', 'quake'];
+        for (let k = 0; k < twists; k++) {
+          const tw = pool.splice(Math.floor(r() * pool.length), 1)[0];
+          if (tw === 'wind') o.wind = Math.round((r() < 0.5 ? -1 : 1) * (0.4 + r() * 0.6) * 10) / 10;
+          if (tw === 'slope') o.slope = Math.round((0.02 + r() * 0.06) * 100) / 100;
+          if (tw === 'patch') o.patches = [{ at: 0, si: pick([0, 1, 2, 3].filter(x => x !== o.si)) }];
+          if (tw === 'crumble') o.crumble = r() < 0.5 ? [{ at: 0, len: 0.4 }] : [{ at: 0, len: 0.4 }, { at: 0, len: 0.4 }];
+          if (tw === 'moon') { o.gs = 0.4; o.dist = Math.round((16 + r() * 6) * 10) / 10; }
+          if (tw === 'fog') o.fog = Math.round((0.3 + r() * 0.4) * 10) / 10;
+          if (tw === 'quake') o.quake = Math.round((0.3 + r() * 0.3) * 10) / 10;
+        }
+        // positions near the edge are set after the distance is known
+        if (o.patches) o.patches[0].at = Math.round((o.dist - (1.5 + r() * 2.5)) * 10) / 10;
+        if (o.crumble) o.crumble.forEach((c, k) => { c.at = Math.round((o.dist - 2.4 + k * 1.0) * 10) / 10; });
+        if (o.gs === 0.4) delete o.wind;          // no wind on the Moon
+        const sp = spec(o);
+        if (!endlessValid(sp)) continue;
+        if (targetS(endlessGoal(i), sp) >= 100) continue;   // too touchy for a fair target
+        return sp;
+      }
+      return spec({ si: 0, dist: 12, vmax: 7 });   // fallback: a plain road
+    }
+    function endlessTarget(i, sp) { return targetS(endlessGoal(i), sp); }
+
     return { ACCEL, SURFACES, hold, holdTimeFor, stopTime, stopDist, slide, slideTimeFor, gapAfter, releaseFor,
              sensitivity, REF, timingSigma, normInv, CURVE, successGoal, targetFor, GRADE, grade,
              seededParams, CURATED, cliffParams, cliffTarget,
              G, spec, holdAccel, groundCK, segments, holdS, holdTimeForS, slidePlan, planAt, planTimeFor, edgeAt,
-             gapS, releaseS, sensitivityS, refFor, storyGoal, targetS, successProbS, WORLDS, CLIFFS, worldOf, cliffSpec, storyTarget };
+             gapS, releaseS, sensitivityS, refFor, storyGoal, targetS, successProbS, endlessGoal, endlessSpec, endlessTarget, endlessValid, WORLDS, CLIFFS, worldOf, cliffSpec, storyTarget };
   })();
   /* PHYSICS-END */
 
@@ -596,6 +644,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     return Math.round(10 * Math.max(0, 1 - resultCm / targetCm)) + (grade === 'PERFECT' ? 15 : grade === 'GREAT' ? 5 : 0) + 1;
   }
   let replay = null;          // a cliff replayed from the map (no hearts, story position unchanged)
+  // Endless (unlocked after cliff 50): new cliffs every run; the score is the number of cliffs
+  // cleared in a row (any miss or fall ends the run). No rescues, helpers or rewards here.
+  let endless = null;         // { seed, i, score }
+  let endlessBest = clampInt(load('cliff_endless_best', 0), 0, 1e6);
+  const newRun = () => ({ seed: Math.random().toString(36).slice(2, 10), i: 0, score: 0 });
+  const storyDone = () => bestCliff > Physics.CLIFFS.length;
   let screen = 'game';        // 'game' | 'map'
   const isCheckpoint = n => (n - 1) % CP_EVERY === 0;
   function saveProgress() {
@@ -760,6 +814,14 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     });
   }
 
+  // Endless cliffs borrow the look of the world whose twist they show most.
+  function endlessLook(sp) {
+    if (sp.gs < 1) return 4;
+    if (sp.crumble.length || sp.quake) return 5;
+    if (sp.patches.length || sp.fog) return 3;
+    if (sp.wind) return 2;
+    return 1;
+  }
   // Story targets are the same every time for a given cliff: compute once (a few ms), then reuse.
   const targetCache = {};
   function storyTargetCached(n, sp) {
@@ -779,8 +841,14 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       daily = true;
       ({ si, dist, vmax } = dailyParams());
     } else {
-      mode = 'run';
-      if (ASSIST) { sp = Physics.cliffSpec(replay || cliff); ({ si, dist, vmax } = sp); }   // story cliffs: same for everyone
+      if (mode !== 'endless' && ASSIST && !replay && cliff > Physics.CLIFFS.length) mode = 'endless';   // story finished
+      if (mode === 'endless') {
+        if (!endless) endless = newRun();
+        sp = Physics.endlessSpec(endless.seed, endless.i); ({ si, dist, vmax } = sp);
+      } else {
+        mode = 'run';
+        if (ASSIST) { sp = Physics.cliffSpec(replay || cliff); ({ si, dist, vmax } = sp); }   // story cliffs: same for everyone
+      }
     }
     if (!sp) sp = Physics.spec({ si, dist, vmax });                               // plain cliff, no twists
     const surface = SURFACES[si];
@@ -792,8 +860,10 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       params: { si, dist, vmax },
       friend: fr, friendTry: fr ? fr.tries : 0, friendWin: false,
       daily, dailyDay: daily ? dayKey() : null, dailyTry: 0, newDailyBest: false, layoutKey, releaseFront: null,
-      cliff: replay || cliff, replay: !!replay, target: storyTargetCached(replay || cliff, sp), grade: null, stars: 0, newStars: false, coinsWon: 0, spec: sp, plan: null, surfNow: surface,
-      world: Physics.worldOf(replay || cliff), worldDone: false, cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
+      cliff: mode === 'endless' && !daily && !fr ? 1000 + endless.i : replay || cliff, replay: !!replay,
+      endless: mode === 'endless' && !daily && !fr, runOver: false,
+      target: mode === 'endless' && !daily && !fr ? Physics.endlessTarget(endless.i, sp) : storyTargetCached(replay || cliff, sp), grade: null, stars: 0, newStars: false, coinsWon: 0, spec: sp, plan: null, surfNow: surface,
+      world: mode === 'endless' && !daily && !fr ? endlessLook(sp) : Physics.worldOf(replay || cliff), worldDone: false, cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
       vmax,
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
       x0: EDGE_X / PPM - dist - CAR_LEN, dist,
@@ -839,6 +909,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (doubleVisible() && inBtn(DOUBLE_BTN, lx, ly)) { requestReward('double', () => { coins += s.coinsWon; save('cliff_coins', coins); s.coinsWon *= 2; s.doubled = true; Sound.ding(); }); return; }
     if (heartBtnVisible() && inBtn(HEART_BTN, lx, ly)) { requestReward('heart', () => { hearts++; saveProgress(); s.heartsLeft = hearts; s.extraHeart = true; Sound.ding(); }); return; }
     if (boxVisible() && inBtn(BOX_BTN, lx, ly)) { openBox(); return; }
+    if (cardVisible() && inBtn(CARD_BTN, lx, ly)) { pendingCard = true; return; }
     if (pillVisible() && inBtn(DAILY_PILL, lx, ly + 0)) { toggleDaily(); return; }
     if (mapBtnVisible() && inBtn(MAP_BTN, lx, ly)) { openMap(); return; }
     pressGame(e.pointerId, evT(e));
@@ -877,6 +948,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if ((s.state === 'stopped' || s.state === 'fell' || s.state === 'falling') && now - s.endAt > 300) {
       if (s.rescue && s.rescue.state === 'offer') declineRescue();   // any other tap: no rescue, instant retry
       if (s.replay && s.cleared) replay = null;              // replay done: back to your story cliff
+      if (s.endless && s.runOver) endless = newRun();         // instant new run
       newRound();
     }
   }
@@ -884,6 +956,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     Sound.init();   // phones only unlock audio on a finger lift
     if (pendingChallenge) { pendingChallenge = false; doChallenge(); return; }
     if (pendingShare) { pendingShare = false; doShare(); return; }
+    if (pendingCard) { pendingCard = false; shareCard(); return; }
     if (activePointer !== null && e.pointerId !== activePointer) return;
     activePointer = null;
     if (s.state === 'holding') releaseAt(evT(e));
@@ -1426,6 +1499,33 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     explainSave(why);
   }
 
+  // "All worlds completed!" card (web build only: the platform build has no external sharing)
+  const CARD_BTN = { x: W / 2, y: 610, w: 240, h: 52 };
+  let pendingCard = false;
+  function cardVisible() { return !IS_PORTAL && s.allDone && s.state === 'stopped'; }
+  function shareCard() {
+    let total = 0; for (const k in stars) total += stars[k];
+    const c = document.createElement('canvas'); c.width = 1080; c.height = 1080;
+    const g = c.getContext('2d');
+    const bg = g.createLinearGradient(0, 0, 0, 1080); bg.addColorStop(0, '#2a1f5c'); bg.addColorStop(0.65, '#ff7a59'); bg.addColorStop(1, '#ffb36b');
+    g.fillStyle = bg; g.fillRect(0, 0, 1080, 1080);
+    const t = (str, y, size, col) => { g.font = `900 ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`; g.textAlign = 'center'; g.lineWidth = size * 0.16; g.strokeStyle = 'rgba(10,10,25,0.85)'; g.strokeText(str, 540, y); g.fillStyle = col; g.fillText(str, 540, y); };
+    t('CLIFF EDGE', 180, 110, '#ffd23f');
+    t('ALL 5 WORLDS', 420, 96, '#ffffff');
+    t('COMPLETED!', 530, 96, '#ffffff');
+    t(`★ ${total} / 150 STARS`, 680, 64, '#ffd23f');
+    t('Can you beat all 5 bosses?', 820, 44, '#fff3c4');
+    t(GAME_URL.replace('https://', ''), 960, 36, '#ffffff');
+    Track.send('share_card', total);
+    c.toBlob(blob => {
+      if (!blob) return;
+      const file = new File([blob], 'cliff-edge-all-worlds.png', { type: 'image/png' });
+      let ok = false;
+      if (navigator.share && navigator.canShare) { try { ok = navigator.canShare({ files: [file] }); } catch (e) {} }
+      if (ok) navigator.share({ files: [file], text: `I beat all 5 worlds of Cliff Edge! ${GAME_URL}` }).catch(() => {});
+      else { saveFile(blob, file.name); showToast('Card saved'); }
+    }, 'image/png');
+  }
   function saveFile(blob, name) {
     try {
       const url = URL.createObjectURL(blob);
@@ -1481,6 +1581,10 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (hearts <= 1 && rescueAllowed()) { s.rescue = { state: 'offer', t0: null }; s.heartsLeft = 0; return; }
     applyMiss();
   }
+  function endRun() {
+    s.runOver = true; s.missed = true; s.runScore = endless.score;
+    Track.send('endless_run', endless.score);      // web build only
+  }
   function applyMiss() {
     hearts--;
     if (hearts <= 0) { cliff = checkpoint; hearts = baseHearts(checkpoint); s.backTo = checkpoint; }
@@ -1500,7 +1604,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     rememberTry(false);
     fallsThisSession++;
     s.fallTiming = fallsThisSession === 1 ? FALL_FULL : FALL_SHORT;
-    if (!s.friend && !s.daily) { if (s.replay) { s.missed = true; stuck = stuck.n === s.cliff ? { n: s.cliff, fails: stuck.fails + 1 } : { n: s.cliff, fails: 1 }; } else missCliff(); }
+    if (s.endless) endRun(); else if (!s.friend && !s.daily) { if (s.replay) { s.missed = true; stuck = stuck.n === s.cliff ? { n: s.cliff, fails: stuck.fails + 1 } : { n: s.cliff, fails: 1 }; } else missCliff(); }
     s.state = 'falling';
     s.endAt = performance.now();
     s.fallT = 0;
@@ -1615,6 +1719,14 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
           // The round belongs to the day it was made for; after midnight it no longer changes the new day.
           const d = loadJSON('cliff_daily') || getDaily();
           if (d.day === s.dailyDay && (d.best === null || s.result < d.best)) { d.best = s.result; s.newDailyBest = true; saveJSON('cliff_daily', d); }
+        } else if (s.endless) {
+          if (s.result < s.target) {
+            s.cleared = true; s.grade = Physics.grade(s.result, s.target);
+            s.coinsWon = coinReward(s.result, s.target, s.grade); coins += s.coinsWon; save('cliff_coins', coins);
+            endless.i++; endless.score++;
+            if (endless.score > endlessBest) { endlessBest = endless.score; save('cliff_endless_best', endlessBest); s.newEndlessBest = true; }
+            puff(EDGE_X - 30, GROUND_Y - 40, 30, '#ffd23f', 160, 380, 5, 1.1);
+          } else endRun();
         } else if (!s.friend) {
           if (s.result < s.target) {
             s.cleared = true;
@@ -1626,6 +1738,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
             coins += s.coinsWon; save('cliff_coins', coins);
             if (!s.replay) {
               if (s.spec.boss) s.worldDone = true;
+              if (s.spec.boss && s.world === 5 && !storyDone()) { s.allDone = true; Track.send('all_worlds', roundsPlayed); }
               cliff++;
               if (s.stars === 3 && hearts < maxHearts(cliff)) { hearts++; s.heartWon = true; }   // golden heart: reward for skill
               if (isCheckpoint(cliff)) { checkpoint = cliff; hearts = Math.min(maxHearts(cliff), Math.max(hearts, baseHearts(cliff))); s.newCp = true; }
@@ -2431,8 +2544,9 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
     ctx.font = '900 28px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#12141f';
-    ctx.fillText('PLAY ' + cliffLabel(cliff).replace('CLIFF ', ''), b.x, b.y + 1);
-    text('Tap a cliff you reached to replay it for stars', W / 2, 836, 16, 'rgba(255,255,255,0.7)', 700);
+    ctx.fillText(storyDone() ? 'PLAY ENDLESS' : 'PLAY ' + cliffLabel(cliff).replace('CLIFF ', ''), b.x, b.y + 1);
+    if (storyDone()) text(`ENDLESS BEST ${endlessBest} · tap a cliff to replay it`, W / 2, 836, 16, '#7ef9ff', 800);
+    else text('Tap a cliff you reached to replay it for stars', W / 2, 836, 16, 'rgba(255,255,255,0.7)', 700);
   }
 
   function draw() {
@@ -2564,7 +2678,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 
     if (s.spec.fog && s.world === 2 && !s.daily && !s.friend) drawStormHaze();
     // HUD (screen space)
-    text('BEST ' + cliffLabel(bestCliff).replace('CLIFF ', ''), 26, 50, 22, '#ffffff', 800, 'left');
+    text(storyDone() ? 'ALL WORLDS ✓' : 'BEST ' + cliffLabel(bestCliff).replace('CLIFF ', ''), 26, 50, 22, '#ffffff', 800, 'left');
 
     drawMuteIcon();
     if (pillVisible()) drawDailyPill();
@@ -2585,6 +2699,29 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     const rescuing = s.rescue && s.rescue.state === 'anim';
     if (rescuing) {
       // (only the rescue title, drawn below)
+    } else if (s.endless) {
+      if (s.runOver && roundEnded()) {
+        text('RUN OVER', W / 2, 140, 36, '#ff8fa8', 900);
+        text(`${s.runScore} ${s.runScore === 1 ? 'CLIFF' : 'CLIFFS'} IN A ROW`, W / 2, 186, 26, '#ffffff', 900);
+        text(s.runScore >= endlessBest && s.runScore > 0 ? 'NEW BEST!' : `BEST ${endlessBest}`, W / 2, 222, 20, s.runScore >= endlessBest && s.runScore > 0 ? '#ffd23f' : '#fff3c4', 900);
+      } else if (s.cleared) {
+        text(`STREAK ${endless.score}!`, W / 2, 150, 36, '#ffd23f', 900);
+        text(s.newEndlessBest ? 'NEW BEST!' : `Best ${endlessBest}`, W / 2, 196, 22, s.newEndlessBest ? '#ffd23f' : '#fff3c4', 800);
+      } else {
+        text('ENDLESS', W / 2, 116, 16, '#7ef9ff', 900);
+        text(`CLIFF ${endless.i + 1} · BEST ${endlessBest}`, W / 2, 150, 20, '#ffd23f', 800);
+        text('UNDER ' + fmtTarget(s.target), W / 2, 194, 44, '#ffffff', 900);
+        text(endless.score ? `STREAK ${endless.score}` : 'One miss ends the run', W / 2, 242, 18, '#ffffff', 900);
+        if (s.state === 'ready') {
+          const tl = [];
+          if (s.spec.wind) tl.push(s.spec.wind > 0 ? 'TAIL WIND ›' : '‹ HEAD WIND');
+          if (s.spec.gs < 1) tl.push('LOW GRAVITY');
+          if (s.spec.crumble.length) tl.push('CRUMBLING EDGE');
+          if (s.spec.quake) tl.push('EARTHQUAKE');
+          const lines = tl.length > 2 ? [tl.slice(0, 2).join(' · '), tl.slice(2).join(' · ')] : tl;
+          lines.forEach((l, i) => text(l, W / 2, 280 + i * 26, 20, '#ffffff', 900));
+        }
+      }
     } else if (s.daily) {
       const d = getDaily(), left = DAILY_TRIES - d.tries, streak = getStreak();
       text('DAILY CHALLENGE', W / 2, 150, 20, '#ffd23f', 800);
@@ -2678,17 +2815,17 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
         text(G[0], W / 2, 358, G[1], G[2], G[3]);
         if (s.newBest) text('NEW BEST STOP', W / 2, 238, 18, '#ffd23f', 800);
         // one row: the stars of this stop, then the coins won
-        drawStarRow(W / 2 - 46, 400, s.stars, 15);
+        if (!s.endless) drawStarRow(W / 2 - 46, 400, s.stars, 15);
         if (s.coinsWon) { drawCoin(W / 2 + 50, 400, 11); text('+' + s.coinsWon, W / 2 + 66, 401, 24, '#ffe27a', 900, 'left'); }
       }
       else text(s.newBest ? 'NEW BEST STOP!' : 'from the edge', W / 2, 358, 28, s.newBest ? '#ffd23f' : '#fff3c4', 700);
-      text(endHint(s.cleared ? `TAP FOR ${cliffLabel(cliff)}` : `TAP TO RETRY ${cliffLabel(s.replay ? s.cliff : cliff)}`, 'TAP TO PLAY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
+      text(endHint(s.endless ? (s.cleared ? 'TAP FOR THE NEXT CLIFF' : 'TAP FOR A NEW RUN') : s.allDone ? 'TAP TO START ENDLESS' : s.cleared ? `TAP FOR ${cliffLabel(cliff)}` : `TAP TO RETRY ${cliffLabel(s.replay ? s.cliff : cliff)}`, 'TAP TO PLAY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
     } else if (rescuing) {
       // the rescue animation speaks for itself
     } else if (s.state === 'falling' || s.state === 'fell') {
       text(s.fallMsg, W / 2, 340, 64, '#ffffff');
       if (s.friend) text(s.friend.score === null ? 'YOU BOTH FELL!' : 'YOUR FRIEND WINS', W / 2, 400, 28, '#fff3c4', 900);
-      text(endHint(`TAP TO RETRY ${cliffLabel(s.replay ? s.cliff : cliff)}`, 'TAP TO TRY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
+      text(endHint(s.endless ? 'TAP FOR A NEW RUN' : `TAP TO RETRY ${cliffLabel(s.replay ? s.cliff : cliff)}`, 'TAP TO TRY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
     }
     if (s.introAt) drawBossIntro();
     if (rescueBtnVisible()) drawRescueBtn();
@@ -2698,6 +2835,11 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (boxVisible()) drawPillBtn(BOX_BTN, 'OPEN MYSTERY BOX', '#7ef9ff', '#12141f', 18);
     if (s.boxCoins) { drawCoin(W / 2 - 50, 452, 12); text('+' + s.boxCoins + ' FROM THE BOX', W / 2 - 32, 453, 20, '#7ef9ff', 900, 'left'); }
     if (s.heartWon) text('GOLDEN HEART! +1 ♥', W / 2, 512, 20, '#ffd23f', 900);
+    if (s.allDone && s.state === 'stopped') {
+      text('ENDLESS MODE UNLOCKED!', W / 2, 556, 24, '#7ef9ff', 900);
+      if (Math.random() < 0.3) puff(EDGE_X - 120 + Math.random() * 200, GROUND_Y - 200 - Math.random() * 150, 3, ['#ffd23f', '#ff4f7b', '#7ef9ff'][Math.floor(Math.random() * 3)], 120, 200, 4, 1.0);
+      if (cardVisible()) drawPillBtn(CARD_BTN, 'SHARE MY WIN', '#ffffff', '#12141f', 22);
+    }
     if (s.rescue && s.rescue.state === 'anim') text({ rewind: 'REWIND!', balloon: 'BALLOON RESCUE!', seagull: 'SEAGULL RESCUE!', parachute: 'PARACHUTE!' }[s.rescue.kind], W / 2, 150, 36, '#7ef9ff', 900);
     if (inSlowMo()) text('SLOW MOTION', W / 2, 290, 22, '#7ef9ff', 900);
     if (shareVisible()) drawShareBtn();

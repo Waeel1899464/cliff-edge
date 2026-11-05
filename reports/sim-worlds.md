@@ -73,3 +73,15 @@
 | 5-9 | MUD | 2 crumbling pieces, fog, quake | 13 | 8.5 | 26% | 32 | 49% / 74% | 26% / 42% | 15% / 27% |
 | 5-10 | ROAD | BOSS: slope 0.05, head wind 0.6, ice @10.5m, road @12.5m, 2 crumbling pieces, fog, quake | 15 | 8.5 | 20% | 28 | 41% / 64% | 22% / 36% | 13% / 21% |
 
+
+## Endless — first-try success by cliff number (average over 12 runs each, 400 tries per cliff)
+
+| Endless cliff | Twists mixed | Goal | Skilled | Average | Beginner |
+|---|---|---|---|---|---|
+| 1 | 0 | 60% | 91% | 59% | 37% |
+| 6 | 1 | 58% | 90% | 58% | 35% |
+| 11 | 2 | 52% | 86% | 53% | 33% |
+| 16 | 2 | 46% | 78% | 46% | 27% |
+| 21 | 3 | 40% | 70% | 40% | 23% |
+| 31 | 3 | 28% | 49% | 27% | 16% |
+| 41 | 3 | 25% | 50% | 26% | 15% |
