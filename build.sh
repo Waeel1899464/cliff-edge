@@ -1,26 +1,33 @@
 #!/bin/sh
-# Builds the public web version (docs/index.html) from the game file (index.html).
+# Builds every page of Cliff Edge V3 from the one game file (index.html).
 # index.html is written as page content for claude.ai, which adds the page frame itself;
-# the public version needs that frame (doctype, phone viewport, share preview tags) added here.
+# the other pages get their frame (doctype, phone viewport, share tags) added here.
+#
+#   ./build.sh crazygames-v3   -> platform/crazygames-v3/index.html   (the file uploaded to CrazyGames)
+#   ./build.sh preview-v3      -> docs/crazygames-preview-v3/index.html (identical file)
+#   ./build.sh web-v3          -> platform/web-v3/index.html          (website version, with tracking; staging copy)
+#   ./build.sh web             -> docs/index.html                     (PUBLISH STEP ONLY: same file as web-v3)
+#   ./build.sh artifact-v3 F   -> F  (private claude.ai test page of the CrazyGames build)
+#   ./build.sh artifact-web F  -> F  (private claude.ai test page of the website build)
+# Old V1/V2 build targets live on the branches backup/cg-stable-a7 (V1) and feature/fair-precision (V2).
 set -e
 cd "$(dirname "$0")"
-TARGET="${1:-web}"
+TARGET="${1:-}"
+USAGE="use: crazygames-v3 | preview-v3 | web-v3 | web | artifact-v3 <file> | artifact-web <file>"
+[ -z "$TARGET" ] && { echo "$USAGE"; exit 1; }
 
-# ---------------------------------------------------------------------------
-# Platform build (CrazyGames): ./build.sh crazygames -> platform/crazygames/index.html
-# Same game source. The line `window.CLIFF_BUILD = 'crazygames'` switches off what platforms
-# do not allow (external links, clip sharing, friend challenge links, event tracking).
-# The web version on GitHub Pages is NOT touched by this target.
-# ---------------------------------------------------------------------------
-# Experimental v2 builds (feature/fair-precision): same platform page, plus their own storage
-# prefix (cg2_) so they never read or change the saves of the web game or of the first preview.
-#   ./build.sh crazygames-v2 -> platform/crazygames-v2/index.html
-#   ./build.sh preview-v2    -> docs/crazygames-preview-v2/index.html (identical file)
-if [ "$TARGET" = "crazygames-v2" ] || [ "$TARGET" = "preview-v2" ]; then
-  if [ "$TARGET" = "crazygames-v2" ]; then OUT=platform/crazygames-v2; else OUT=docs/crazygames-preview-v2; fi
-  mkdir -p "$OUT"
-  "$0" crazygames-stdout | sed "s#<script>window.CLIFF_BUILD = 'crazygames';</script>#<script>window.CLIFF_BUILD = 'crazygames'; window.CLIFF_STORE_PREFIX = 'cg2_';</script>#" > "$OUT/index.html"
-  echo "built $OUT/index.html"
+# Storage: CrazyGames build saves under cg3_, website build under w3_. V1 saves on players' phones are
+# never read, moved or deleted: website players start V3 fresh (owner's decision, 2026-11-05).
+CG_LINE="<script>window.CLIFF_BUILD = 'crazygames'; window.CLIFF_STORE_PREFIX = 'cg3_';</script>"
+WEB_LINE="<script>window.CLIFF_STORE_PREFIX = 'w3_'; window.CLIFF_VERSION = 'v3';</script>"
+
+# Private test pages on claude.ai: the game file with a build line, without its first title line
+# and the claude-only viewport meta (claude.ai adds its own frame).
+if [ "$TARGET" = "artifact-v3" ] || [ "$TARGET" = "artifact-web" ]; then
+  [ -z "$2" ] && { echo "$USAGE"; exit 1; }
+  if [ "$TARGET" = "artifact-v3" ]; then T="Cliff Edge Worlds"; L="$CG_LINE"; else T="Cliff Edge Web V3"; L="$WEB_LINE"; fi
+  { echo "<title>$T</title>"; echo "$L"; sed '1d' index.html | grep -v 'claude:viewport-fit-sides'; } > "$2"
+  echo "built $2"
   exit 0
 fi
 
@@ -30,13 +37,12 @@ fi
 if [ "$TARGET" = "crazygames-v3" ] || [ "$TARGET" = "preview-v3" ]; then
   if [ "$TARGET" = "crazygames-v3" ]; then OUT=platform/crazygames-v3; else OUT=docs/crazygames-preview-v3; fi
   mkdir -p "$OUT"
-  "$0" crazygames-stdout | sed "s#<script>window.CLIFF_BUILD = 'crazygames';</script>#<script>window.CLIFF_BUILD = 'crazygames'; window.CLIFF_STORE_PREFIX = 'cg3_';</script>#" > "$OUT/index.html"
+  "$0" crazygames-stdout | sed "s#<script>window.CLIFF_BUILD = 'crazygames';</script>#$CG_LINE#" > "$OUT/index.html"
   echo "built $OUT/index.html"
   exit 0
 fi
 
-if [ "$TARGET" = "crazygames" ] || [ "$TARGET" = "crazygames-stdout" ]; then
-  [ "$TARGET" = "crazygames" ] && mkdir -p platform/crazygames
+if [ "$TARGET" = "crazygames-stdout" ]; then
   {
   cat <<'HEAD'
 <!doctype html>
@@ -58,17 +64,18 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 HEAD
   cat index.html
   printf '\n</body>\n</html>\n'
-  } > "$( [ "$TARGET" = "crazygames" ] && echo platform/crazygames/index.html || echo /dev/stdout )"
-  [ "$TARGET" = "crazygames" ] && echo "built platform/crazygames/index.html"
+  }
   exit 0
 fi
 
-if [ "$TARGET" != "web" ]; then echo "unknown target: $TARGET (use: web | crazygames | crazygames-v2 | preview-v2 | crazygames-v3 | preview-v3)"; exit 1; fi
+if [ "$TARGET" = "web-v3" ]; then OUT=platform/web-v3/index.html
+elif [ "$TARGET" = "web" ]; then OUT=docs/index.html
+else echo "unknown target: $TARGET ($USAGE)"; exit 1; fi
 
 # ---------------------------------------------------------------------------
-# Web build (GitHub Pages): ./build.sh  or  ./build.sh web  -> docs/index.html
+# Website build (GitHub Pages). web-v3 writes a staging copy; web writes the published file.
 # ---------------------------------------------------------------------------
-mkdir -p docs
+mkdir -p "$(dirname "$OUT")"
 {
 cat <<'HEAD'
 <!doctype html>
@@ -95,11 +102,11 @@ cat <<'HEAD'
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 [hidden]{display:none!important}
 </style>
-</head>
-<body>
 HEAD
+echo "$WEB_LINE"
+printf '</head>\n<body>\n'
 cat index.html
 printf '\n</body>\n</html>\n'
-} > docs/index.html
-touch docs/.nojekyll
-echo "built docs/index.html"
+} > "$OUT"
+[ "$TARGET" = "web" ] && touch docs/.nojekyll
+echo "built $OUT"
