@@ -226,6 +226,39 @@ const seed = (cur, cp, best, extra = '') => IN_PAGE + HELP + `localStorage.setIt
       check('daily challenge: no rescue offered (competition stays pure)', r.d && !r.rescue);
       await ctx.close();
     }
+    // ---- boss battle (world 1: cliffs 6-10, 5 phases, 4 hearts) ----
+    {
+      const { page, ctx, errors } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(5, 1, 5) });
+      const r = await page.evaluate(() => {
+        const out = {}, k = n => localStorage.getItem('cg3_cliff_' + n);
+        window.__play(window.__cliff().target * 0.4); window.__next();          // clear 1-5 -> enter the battle
+        let s = window.__cliff();
+        out.enter = s.cliff === 6 && !!s.introAt && k('hearts') === '4';
+        window.__play(-999); window.__next();                                  // fail phase 1: no second intro
+        out.noReIntro = window.__cliff().cliff === 6 && !window.__cliff().introAt && k('hearts') === '3';
+        const phases = [];
+        for (let i = 0; i < 5; i++) { const r2 = window.__play(window.__cliff().target * 0.4); phases.push([r2.cliff, r2.cleared, r2.worldDone]); window.__next(); }
+        out.phases = phases.every((p, i) => p[0] === 6 + i && p[1]) && phases[4][2] === true && phases.slice(0, 4).every(p => !p[2]);
+        out.after = window.__cliff().cliff === 11 && k('hearts') === '3';
+        return out;
+      });
+      check('boss battle: entering phase 1 shows the intro, 4 hearts', r.enter);
+      check('boss battle: retrying phase 1 after a miss does not repeat the intro', r.noReIntro);
+      check('boss battle: 5 phases (cliffs 6-10); only the final hit ends the world', r.phases);
+      check('after the boss: world 2 starts with 3 hearts again', r.after);
+      check('no page errors (boss battle)', errors.length === 0, errors.join(' | '));
+      await ctx.close();
+    }
+    {
+      const { page, ctx } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(8, 6, 8, "localStorage.setItem('cg3_cliff_hearts','1');") });
+      const r = await page.evaluate(() => {
+        window.__play(-999); window.__next();                                  // last heart, decline the rescue
+        const s = window.__cliff();
+        return { back: s.cliff === 6 && localStorage.getItem('cg3_cliff_hearts') === '4' && !!s.introAt };
+      });
+      check('boss battle lost: back to phase 1 with 4 hearts, and the intro again', r.back);
+      await ctx.close();
+    }
   } finally { await b.close(); srv.close(); }
   process.exit(summary() ? 1 : 0);
 })();

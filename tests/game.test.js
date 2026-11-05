@@ -50,8 +50,11 @@ const PLAY = `
       // play the first 10 cliffs in the game, stopping at 40% of each target: all cleared, in order
       const run = await page.evaluate(() => { const out = []; for (let i = 0; i < 10; i++) { const s = window.__cliff(); const T = s.target; const res = window.__playGap(T * 0.4); out.push([s.cliff, T, res.cleared]); window.__next(); } return { out, now: window.__cliff().cliff }; });
       check('C: playing cliffs 1–10 (world 1) in the game uses the V3 story targets; all clear in order', run.out.every((x, i) => x[0] === i + 1 && x[1] === r[i].T3 && x[2]) && run.now === 11, run.out.map(x => x[1]).join(','));
-      const w1 = await page.evaluate(() => { const P = window.__physics; return { same: [1,2,3,4,5,6,7,8,9].every(n => { const a = P.cliffSpec(n), b = P.CURATED[n - 1]; return a.si === b.si && a.dist === b.dist && a.vmax === b.vmax && !a.slope && !a.wind && a.gs === 1 && !a.patches.length && !a.crumble.length; }), boss: P.cliffSpec(10) }; });
-      check('V3: world 1 cliffs 1–9 are exactly V2\'s hand-made cliffs (no twists); cliff 10 is the boss slope', w1.same && w1.boss.boss === true && w1.boss.slope > 0, JSON.stringify(w1.boss));
+      const w1 = await page.evaluate(() => { const P = window.__physics; return {
+        same: [1,2,3,4,5].every(n => { const a = P.cliffSpec(n), b = P.CURATED[n - 1]; return a.si === b.si && a.dist === b.dist && a.vmax === b.vmax && !a.slope && !a.wind && a.gs === 1 && !a.patches.length && !a.crumble.length; }),
+        arena: [6,7,8,9].map(n => { const a = P.cliffSpec(n), b = P.CURATED[n - 1]; return a.si === b.si && a.vmax === b.vmax && (a.dist === b.dist || n === 6) ? a.slope : -1; }),
+        boss: P.cliffSpec(10) }; });
+      check('V3: world 1 cliffs 1–5 are V2\'s; boss battle 6–9 = V2 layouts with the tilt rising 0.02→0.08; cliff 10 the steep final slope', w1.same && w1.arena.join() === '0.02,0.04,0.06,0.08' && w1.boss.boss === true && w1.boss.slope === 0.1, w1.arena.join());
       check('no page errors (first 10 cliffs)', errors.length === 0, errors.join('|'));
       await ctx.close();
     }
@@ -167,22 +170,24 @@ const PLAY = `
       const r = await page.evaluate(() => {
         const out = {}, k = n => localStorage.getItem('cg3_cliff_' + n);
         for (let i = 0; i < 5; i++) { window.__playGap(window.__cliff().target * 0.4); window.__next(); }
-        out.cp = window.__cliff().cliff === 6 && k('cp') === '6' && k('cur') === '6' && k('hearts') === '3';
+        // cliff 6 starts the world-1 boss battle: 4 hearts there
+        out.cp = window.__cliff().cliff === 6 && k('cp') === '6' && k('cur') === '6' && k('hearts') === '4';
         const a = window.__playGap(-999); window.__next();
         const b = window.__playGap(window.__cliff().target + 5); window.__next();
-        out.hearts = a.hearts === 2 && b.hearts === 1 && k('hearts') === '1';
+        const c2 = window.__playGap(-999); window.__next();
+        out.hearts = a.hearts === 3 && b.hearts === 2 && c2.hearts === 1 && k('hearts') === '1';
         window.__playGap(-999);
         const c = window.__cliff();                         // the round itself (the helper returns a summary)
         // V3: losing the last heart first offers a rescue; nothing is lost until the player chooses
         out.offer = !!(c.rescue && c.rescue.state === 'offer') && k('hearts') === '1';
         window.__next();                                    // any other tap = no rescue: back as usual
-        out.back = out.offer && c.backTo === 6 && window.__cliff().cliff === 6 && k('hearts') === '3';
+        out.back = out.offer && c.backTo === 6 && window.__cliff().cliff === 6 && k('hearts') === '4';
         out.bestCliff = k('bestcliff') === '6';
         return out;
       });
-      check('checkpoint at cliff 6 saved (cliff, checkpoint, hearts refilled)', r.cp);
-      check('fall and missed target each cost one heart (saved)', r.hearts);
-      check('no hearts left → rescue offered first; a normal tap goes back to the checkpoint, hearts refilled', r.back && r.bestCliff);
+      check('checkpoint at cliff 6 saved (cliff, checkpoint), boss battle: hearts refilled to 4', r.cp);
+      check('fall and missed target each cost one heart (saved), 4 → 1', r.hearts);
+      check('no hearts left → rescue offered first; a normal tap goes back to the checkpoint (boss battle start), 4 hearts again', r.back && r.bestCliff);
       await page.reload(); await page.waitForFunction(() => typeof window.__cliff === 'function');
       const after = await page.evaluate(() => ({ cliff: window.__cliff().cliff, target: window.__cliff().target, exp: window.__physics.cliffTarget(6, window.__physics.cliffParams(6)) }));
       check('after reload: same cliff and same target', after.cliff === 6 && after.target === after.exp);

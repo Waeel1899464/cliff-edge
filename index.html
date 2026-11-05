@@ -385,9 +385,14 @@
       { name: 'VOLCANO', twist: 'Crumbling edge' },
     ];
     const CLIFFS = [
-      // World 1: Green Hills — V2's first 9 cliffs, then the boss: a long downhill slope.
-      ...CURATED.slice(0, 9).map(c => spec(c)),
-      spec({ si: 0, dist: 16, vmax: 8, slope: 0.1, boss: true }),   // 10 BOSS: long downhill, the slope keeps pulling
+      // World 1: Green Hills — V2's first 5 cliffs, then the boss battle (cliffs 6-10, 5 phases):
+      // THE GIANT HILL wakes up and tilts the road a little more in every phase (V2's layouts 6-9).
+      ...CURATED.slice(0, 5).map(c => spec(c)),
+      spec(Object.assign({}, CURATED[5], { dist: 12, slope: 0.02 })), //  6 boss phase 1 (checkpoint): ice, barely tilted (1 m longer: top speed before you let go)
+      spec(Object.assign({}, CURATED[6], { slope: 0.04 })),          //  7 phase 2: road
+      spec(Object.assign({}, CURATED[7], { slope: 0.06 })),          //  8 phase 3: mud
+      spec(Object.assign({}, CURATED[8], { slope: 0.08 })),          //  9 phase 4: long road
+      spec({ si: 0, dist: 16, vmax: 8, slope: 0.1, boss: true }),    // 10 phase 5, the final hit: long steep downhill
       // World 2: Desert — wind (constant, shown by arrows and the flag) and sand. si 3 = SAND.
       spec({ si: 0, dist: 10, vmax: 7,   wind: -0.5 }),             // 11 checkpoint: a light head wind on road
       spec({ si: 3, dist: 11, vmax: 7 }),                           // 12 first sand, no wind
@@ -544,7 +549,14 @@
   const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.floor(Number(v) || lo)));
   let cliff = clampInt(load('cliff_cur', 1), 1, 100000);          // cliff being played
   let checkpoint = clampInt(load('cliff_cp', 1), 1, cliff);       // where a lost life sends you back to
-  const MAX_HEARTS = 4;      // 3 hearts + 1 golden heart (earned with a 3-star stop)
+  const MAX_HEARTS = 5;      // up to 4 in a boss battle, + 1 golden heart (earned with a 3-star stop)
+  // Boss battles: the second half of a world (cliffs 6-10) is one fight against the world's boss,
+  // in 5 phases. You get 4 hearts there instead of 3 (same targets, same physics: one more chance).
+  const BOSSES = { 1: { name: 'THE GIANT HILL', kind: 'hill' } };
+  const inArena = n => !!BOSSES[Math.floor((n - 1) / 10) + 1] && (n - 1) % 10 >= 5;
+  const arenaPhase = n => (n - 1) % 10 - 4;                       // 1..5
+  const baseHearts = n => inArena(n) ? 4 : HEARTS;
+  const maxHearts = n => baseHearts(n) + 1;                         // + the golden heart
   let hearts = clampInt(load('cliff_hearts', HEARTS), 1, MAX_HEARTS);
   let roundsPlayed = clampInt(load('cliff_rounds', 0), 0, 1e9);
   let bestCliff = clampInt(load('cliff_bestcliff', 1), cliff, 100000);   // the number players compete on
@@ -770,7 +782,11 @@
       parts: null, fallT: 0, splashed: false, fallMsg: '',
     };
     particles = [];
+    // a boss battle starts (arriving at phase 1, or sent back to it): short intro
+    if (storyRound() && !s.replay && inArena(s.cliff) && arenaPhase(s.cliff) === 1 && lastRoundCliff !== s.cliff) s.introAt = performance.now();
+    lastRoundCliff = s.cliff;
   }
+  let lastRoundCliff = null;
   newRound();
   Track.send(friend ? 'challenge_open' : 'open', roundsPlayed);
 
@@ -1441,7 +1457,7 @@
   }
   function applyMiss() {
     hearts--;
-    if (hearts <= 0) { cliff = checkpoint; hearts = HEARTS; s.backTo = checkpoint; }
+    if (hearts <= 0) { cliff = checkpoint; hearts = baseHearts(checkpoint); s.backTo = checkpoint; }
     s.heartsLeft = hearts;
     saveProgress();
   }
@@ -1585,8 +1601,9 @@
             if (!s.replay) {
               if (s.spec.boss) s.worldDone = true;
               cliff++;
-              if (s.stars === 3 && hearts < MAX_HEARTS) { hearts++; s.heartWon = true; }   // golden heart: reward for skill
-              if (isCheckpoint(cliff)) { checkpoint = cliff; hearts = Math.max(hearts, HEARTS); s.newCp = true; }
+              if (s.stars === 3 && hearts < maxHearts(cliff)) { hearts++; s.heartWon = true; }   // golden heart: reward for skill
+              if (isCheckpoint(cliff)) { checkpoint = cliff; hearts = Math.min(maxHearts(cliff), Math.max(hearts, baseHearts(cliff))); s.newCp = true; }
+              if (inArena(cliff) && arenaPhase(cliff) === 1) s.bossStart = true;
               if (cliff > bestCliff) { bestCliff = cliff; s.newBestCliff = true; }
               saveProgress();
             }
@@ -1858,7 +1875,7 @@
 
   // Hearts row; `lost` also shows the spent hearts as empty outlines.
   function drawHearts(cx, cy, n, lost) {
-    const total = n > HEARTS ? MAX_HEARTS : HEARTS, gap = 40, x0 = cx - (total - 1) * gap / 2;
+    const base = baseHearts(s.cliff), total = Math.min(base + 1, Math.max(base, n)), gap = 40, x0 = cx - (total - 1) * gap / 2;
     for (let i = 0; i < total; i++) {
       const full = i < n;
       ctx.save(); ctx.translate(x0 + i * gap, cy + 2); ctx.scale(1.6, 1.6);
@@ -1868,7 +1885,7 @@
       ctx.bezierCurveTo(8, -12, 12, -2, 0, 6);
       ctx.closePath();
       ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(10,10,25,0.75)'; ctx.stroke();
-      ctx.fillStyle = full ? (i >= HEARTS ? '#ffd23f' : '#ff4f7b') : 'rgba(255,255,255,0.18)';
+      ctx.fillStyle = full ? (i >= base ? '#ffd23f' : '#ff4f7b') : 'rgba(255,255,255,0.18)';
       ctx.fill();
       ctx.restore();
     }
@@ -2184,6 +2201,67 @@
     }
   }
 
+  // ---------- Boss battle ----------
+  function drawBossBar(cx, cy, hp, hit) {
+    const w = 34, gap = 6, x0 = cx - (5 * w + 4 * gap) / 2;
+    ctx.fillStyle = 'rgba(10,10,25,0.6)'; ctx.beginPath(); ctx.roundRect(x0 - 6, cy - 11, 5 * w + 4 * gap + 12, 22, 11); ctx.fill();
+    const flash = hit && performance.now() - s.endAt < 500;
+    for (let i = 0; i < 5; i++) {
+      const on = i < hp, lost = hit && i === hp;
+      ctx.fillStyle = on ? '#ff5a3c' : lost && flash ? '#ffffff' : 'rgba(255,255,255,0.15)';
+      ctx.beginPath(); ctx.roundRect(x0 + i * (w + gap), cy - 6, w, 12, 6); ctx.fill();
+    }
+  }
+  // The boss itself, drawn in the sky behind the cliff. It wakes up phase by phase, shakes when hit
+  // and goes down after the final hit. Purely visual: the twist it "causes" is in the physics.
+  function drawBoss() {
+    const B = BOSSES[s.world], ph = arenaPhase(s.cliff), now = performance.now();
+    const hit = s.state === 'stopped' && s.cleared && now - s.endAt < 700;
+    const down = s.worldDone && s.state === 'stopped' ? Math.min(1, (now - s.endAt) / 1400) : 0;
+    const shakeX = hit ? Math.sin(now / 25) * 8 * (1 - (now - s.endAt) / 700) : 0;
+    const cx = 455 + shakeX, top = 380 + down * 330, base = WATER_Y;
+    if (B.kind === 'hill') {
+      ctx.fillStyle = '#3e8c4a';
+      ctx.beginPath(); ctx.moveTo(cx - 230, base);
+      ctx.bezierCurveTo(cx - 170, top - 40, cx + 170, top - 40, cx + 230, base); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.10)';
+      ctx.beginPath(); ctx.ellipse(cx - 40, top + 40, 70, 22, -0.2, 0, Math.PI * 2); ctx.fill();
+      const ey = top + 78, mood = down > 0 ? 'down' : hit ? 'hit' : ['sleep', 'peek', 'awake', 'angry', 'furious'][ph - 1];
+      ctx.strokeStyle = '#173a1e'; ctx.fillStyle = '#173a1e'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+      for (const ex of [cx - 36, cx + 36]) {
+        if (mood === 'sleep') { ctx.beginPath(); ctx.arc(ex, ey, 11, 0.1, Math.PI - 0.1); ctx.stroke(); }
+        else if (mood === 'down' || mood === 'hit') { ctx.beginPath(); ctx.moveTo(ex - 9, ey - 9); ctx.lineTo(ex + 9, ey + 9); ctx.moveTo(ex + 9, ey - 9); ctx.lineTo(ex - 9, ey + 9); ctx.stroke(); }
+        else {
+          const open = mood === 'peek' ? (ex < cx ? 4 : 11) : 12;
+          ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.ellipse(ex, ey, 12, open, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#173a1e'; ctx.beginPath(); ctx.arc(ex + (ex < cx ? 3 : -3), ey + 2, Math.min(5, open), 0, Math.PI * 2); ctx.fill();
+          if (mood === 'angry' || mood === 'furious') {    // angry brows
+            ctx.beginPath(); ctx.moveTo(ex - 16, ey - (ex < cx ? 22 : 12)); ctx.lineTo(ex + 16, ey - (ex < cx ? 12 : 22)); ctx.stroke();
+          }
+        }
+      }
+      // mouth
+      ctx.beginPath();
+      if (mood === 'sleep') { ctx.arc(cx, ey + 34, 6, 0, Math.PI * 2); ctx.stroke(); text('z', cx + 70, ey - 40 - (now / 40 % 20), 22, '#ffffff', 900); }
+      else if (mood === 'furious') { ctx.moveTo(cx - 22, ey + 40); ctx.lineTo(cx - 8, ey + 32); ctx.lineTo(cx + 8, ey + 40); ctx.lineTo(cx + 22, ey + 32); ctx.stroke(); }
+      else if (mood === 'down' || mood === 'hit') { ctx.ellipse(cx, ey + 38, 14, 9, 0, 0, Math.PI * 2); ctx.stroke(); }
+      else { ctx.arc(cx, ey + 46, 16, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke(); }
+      if (mood === 'furious') { ctx.fillStyle = 'rgba(255,90,90,0.5)'; ctx.beginPath(); ctx.arc(cx - 62, ey + 22, 12, 0, Math.PI * 2); ctx.arc(cx + 62, ey + 22, 12, 0, Math.PI * 2); ctx.fill(); }
+    }
+  }
+  // Short intro when a boss battle starts (any tap still starts driving at once).
+  function drawBossIntro() {
+    const k = (performance.now() - s.introAt) / 1800;
+    if (!(k >= 0 && k < 1) || s.state !== 'ready') return;
+    const a = k < 0.15 ? k / 0.15 : k > 0.75 ? (1 - k) / 0.25 : 1;
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(10,10,25,0.72)'; ctx.fillRect(0, 380, W, 170);
+    text('BOSS!', W / 2, 430, 56, '#ff5a3c', 900);
+    text(BOSSES[s.world].name, W / 2, 482, 28, '#ffffff', 900);
+    text('5 phases · 4 hearts', W / 2, 520, 18, '#fff3c4', 800);
+    ctx.restore();
+  }
+
   // Story cliffs are named by world: cliff 17 is "CLIFF 2-7".
   function cliffLabel(n) { const w = Math.floor((n - 1) / 10) + 1, k = (n - 1) % 10 + 1; return `CLIFF ${w}-${k}`; }
 
@@ -2271,7 +2349,8 @@
     for (const nd of nodes) {
       const reached = nd.n <= bestCliff, here = nd.n === cliff, boss = nd.k === 9;
       ctx.save(); ctx.globalAlpha = reached ? 1 : 0.35;
-      ctx.fillStyle = boss ? '#ff8a5c' : reached ? '#ffffff' : 'rgba(255,255,255,0.6)';
+      const arena = inArena(nd.n) && !boss;     // boss battle phases
+      ctx.fillStyle = boss ? '#ff8a5c' : arena ? '#ffd2bd' : reached ? '#ffffff' : 'rgba(255,255,255,0.6)';
       ctx.beginPath(); ctx.arc(nd.x, nd.y, boss ? 19 : 16, 0, Math.PI * 2); ctx.fill();
       ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#12141f';
@@ -2324,6 +2403,7 @@
       }
     }
     if (Z.bg) drawBackdrop(Z);
+    if (inArena(s.cliff) && !s.daily && !s.friend) drawBoss();
     if (s.spec.wind && !s.daily && !s.friend) drawWind(s.spec.wind, s.spec.fog && s.world === 2);
     if (Z !== lastZone) { lastZone = Z; setPageSky(Z); }
 
@@ -2457,6 +2537,13 @@
       if (s.replay) {
         text('CLIFF CLEARED!', W / 2, 150, 34, '#ffd23f', 900);
         text(`Replay done · back to ${cliffLabel(cliff)}`, W / 2, 196, 22, '#fff3c4', 800);
+      } else if (s.worldDone && BOSSES[s.world]) {
+        text(`${BOSSES[s.world].name} IS DOWN!`, W / 2, 150, 32, '#7ef9ff', 900);
+        text(`World ${s.world} complete · next: ${Physics.WORLDS[Math.min(4, s.world)].name}`, W / 2, 196, 20, '#fff3c4', 800);
+      } else if (inArena(s.cliff) && !s.replay) {
+        text('HIT!', W / 2, 140, 40, '#ffd23f', 900);
+        drawBossBar(W / 2, 184, 5 - arenaPhase(s.cliff), true);
+        text(`Next: phase ${arenaPhase(s.cliff) + 1}/5`, W / 2, 214, 18, '#fff3c4', 800);
       } else if (s.worldDone) {
         text(`WORLD ${s.world} COMPLETE!`, W / 2, 150, 36, '#7ef9ff', 900);
         text(`Next: ${Physics.WORLDS[Math.min(4, s.world)].name} · hearts refilled`, W / 2, 196, 22, '#fff3c4', 800);
@@ -2476,9 +2563,16 @@
         drawHearts(W / 2, 198, s.heartsLeft, true);
       }
     } else {
-      text(Physics.WORLDS[s.world - 1].name + (s.replay ? ' · REPLAY' : ''), W / 2, 116, 16, 'rgba(255,255,255,0.85)', 800);
-      if (s.spec.boss) text(`BOSS · ${cliffLabel(s.cliff).replace('CLIFF ', '')}`, W / 2, 150, 22, '#ff8a5c', 900);
-      else text(cliffLabel(s.cliff), W / 2, 150, 20, '#ffd23f', 800);
+      if (inArena(s.cliff) && !s.daily && !s.friend) {
+        const B = BOSSES[s.world];
+        text(B.name + (s.replay ? ' · REPLAY' : ''), W / 2, 104, 16, '#ff8a5c', 900);
+        drawBossBar(W / 2, 126, 6 - arenaPhase(s.cliff), false);
+        text(arenaPhase(s.cliff) === 5 ? 'FINAL HIT · PHASE 5/5' : `BOSS · PHASE ${arenaPhase(s.cliff)}/5`, W / 2, 154, 20, '#ff8a5c', 900);
+      } else {
+        text(Physics.WORLDS[s.world - 1].name + (s.replay ? ' · REPLAY' : ''), W / 2, 116, 16, 'rgba(255,255,255,0.85)', 800);
+        if (s.spec.boss) text(`BOSS · ${cliffLabel(s.cliff).replace('CLIFF ', '')}`, W / 2, 150, 22, '#ff8a5c', 900);
+        else text(cliffLabel(s.cliff), W / 2, 150, 20, '#ffd23f', 800);
+      }
       text('UNDER ' + fmtTarget(s.target), W / 2, 194, 44, '#ffffff', 900);
       if (!s.replay) drawHearts(W / 2, 242, hearts, false);
       else text('NO HEARTS LOST IN A REPLAY', W / 2, 242, 15, 'rgba(255,255,255,0.75)', 800);
@@ -2531,6 +2625,7 @@
       if (s.friend) text(s.friend.score === null ? 'YOU BOTH FELL!' : 'YOUR FRIEND WINS', W / 2, 400, 28, '#fff3c4', 900);
       text(endHint(`TAP TO RETRY ${cliffLabel(s.replay ? s.cliff : cliff)}`, 'TAP TO TRY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
     }
+    if (s.introAt) drawBossIntro();
     if (rescueBtnVisible()) drawRescueBtn();
     if (helperVisible()) drawHelpers();
     if (doubleVisible()) drawPillBtn(DOUBLE_BTN, 'DOUBLE COINS', '#ffd23f', '#12141f', 18);
