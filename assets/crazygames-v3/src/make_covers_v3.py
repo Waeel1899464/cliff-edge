@@ -99,4 +99,6 @@ cover(800, 1200, k=0.74, edge_x=560, band_top=380, sea_y=1125, title_xy=(400, 13
 cover(800, 800, k=0.56, edge_x=540, band_top=190, sea_y=748, title_xy=(40, 520), title_size=104).save(out + '/cover-square-800x800.png', optimize=True)   # boss cloud below the label zone
 cover(1080, 1920, k=1.0, edge_x=727, band_top=380, sea_y=1840, title_xy=(540, 110), title_size=200, align='center').save(out + '/src/trailer-end-portrait.png')
 cover(1920, 1080, k=0.78, edge_x=1450, band_top=0, sea_y=985, title_xy=(110, 300), title_size=230).save(out + '/src/trailer-end-landscape.png')
+# CrazyGames portrait preview videos must be 2:3 (1080x1620): opening frame at that size
+cover(1080, 1620, k=1.0, edge_x=727, band_top=380, sea_y=1560, title_xy=(540, 100), title_size=170, align='center').save(out + '/src/trailer-end-portrait-2x3.png')
 print('covers written to', out)

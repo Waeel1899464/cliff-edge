@@ -5,7 +5,8 @@
 | `cover-landscape-1920x1080.png` | 1920×1080 | Landscape cover |
 | `cover-portrait-800x1200.png` | 800×1200 | Portrait cover |
 | `cover-square-800x800.png` | 800×800 | Square cover |
-| `trailer-portrait-1080x1920-v3.mp4` | 1080×1920, 17.1 s, H.264 30 fps, no audio, 3.6 MB | Preview video, portrait |
+| `trailer-portrait-1080x1620-v3.mp4` | 1080×1620 (2:3), 17.1 s, H.264 30 fps, no audio, 3.5 MB | **CrazyGames portrait preview** (their upload requires 2:3) |
+| `trailer-portrait-1080x1920-v3.mp4` | 1080×1920 (9:16), 17.1 s, H.264 30 fps, no audio, 3.6 MB | Portrait video for TikTok and similar |
 | `trailer-landscape-1920x1080-v3.mp4` | 1920×1080, 17.1 s, H.264 30 fps, no audio, 4.1 MB | Preview video, landscape |
 | `store-text.md` | | Title, descriptions, controls (V3) |
 

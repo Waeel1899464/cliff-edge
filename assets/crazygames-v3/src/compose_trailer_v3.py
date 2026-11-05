@@ -57,14 +57,17 @@ def encoder(path, w, h):
                              '-an', '-c:v', 'libx264', '-preset', 'slow', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', path],
                             stdin=subprocess.PIPE)
 
-P_OUT = os.path.join(OUT, 'trailer-portrait-1080x1920-v3.mp4')
+P_OUT = os.path.join(OUT, 'trailer-portrait-1080x1920-v3.mp4')       # 9:16 (TikTok and similar)
+P23_OUT = os.path.join(OUT, 'trailer-portrait-1080x1620-v3.mp4')     # 2:3, required by CrazyGames for portrait previews
+CROP23 = (0, 140, 1080, 1760)    # keeps the game's text and the action; trims the top counters and the bottom hint
 L_OUT = os.path.join(OUT, 'trailer-landscape-1920x1080-v3.mp4')
-ep, el = encoder(P_OUT, 1080, 1920), encoder(L_OUT, LW, LH)
+ep, el, e23 = encoder(P_OUT, 1080, 1920), encoder(L_OUT, LW, LH), encoder(P23_OUT, 1080, 1620)
+o23 = Image.open(os.path.join(HERE, 'trailer-end-portrait-2x3.png')).convert('RGBA')
 op = Image.open(os.path.join(HERE, 'trailer-end-portrait.png')).convert('RGBA')
 ol = Image.open(os.path.join(HERE, 'trailer-end-landscape.png')).convert('RGBA')
 count = 0
 for i in range(OPEN):
-    ep.stdin.write(op.convert('RGB').tobytes()); el.stdin.write(ol.convert('RGB').tobytes()); count += 1
+    ep.stdin.write(op.convert('RGB').tobytes()); el.stdin.write(ol.convert('RGB').tobytes()); e23.stdin.write(o23.convert('RGB').tobytes()); count += 1
 first = True
 for sid, before, after, world in SCENES:
     log = json.load(open(os.path.join(FR, sid, 'log.json')))
@@ -75,10 +78,10 @@ for sid, before, after, world in SCENES:
         f = Image.open(os.path.join(FR, sid, '%04d.jpg' % n)).convert('RGBA')
         target = 1330 if log[n]['st'] in ('falling', 'fell') else 1215   # below the game's text rows
         cy += (target - cy) * 0.12
-        p, l = f, landscape(f, world, cy)
+        p, l, q = f, landscape(f, world, cy), f.crop(CROP23)
         if first and n - a < XFADE:              # cross-fade from the opening frame
-            t = (n - a + 1) / (XFADE + 1); p = Image.blend(op, p, t); l = Image.blend(ol, l, t)
-        ep.stdin.write(p.convert('RGB').tobytes()); el.stdin.write(l.convert('RGB').tobytes()); count += 1
+            t = (n - a + 1) / (XFADE + 1); p = Image.blend(op, p, t); l = Image.blend(ol, l, t); q = Image.blend(o23, q, t)
+        ep.stdin.write(p.convert('RGB').tobytes()); el.stdin.write(l.convert('RGB').tobytes()); e23.stdin.write(q.convert('RGB').tobytes()); count += 1
     first = False
-for e in (ep, el): e.stdin.close(); e.wait()
-print('frames', count, '=', round(count / 30, 2), 's'); print(P_OUT); print(L_OUT)
+for e in (ep, el, e23): e.stdin.close(); e.wait()
+print('frames', count, '=', round(count / 30, 2), 's'); print(P_OUT); print(L_OUT); print(P23_OUT)
