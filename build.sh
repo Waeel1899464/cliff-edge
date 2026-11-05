@@ -4,7 +4,6 @@
 # the other pages get their frame (doctype, phone viewport, share tags) added here.
 #
 #   ./build.sh crazygames-v3   -> platform/crazygames-v3/index.html   (the file uploaded to CrazyGames)
-#   ./build.sh preview-v3      -> docs/crazygames-preview-v3/index.html (identical file)
 #   ./build.sh web-v3          -> platform/web-v3/index.html          (website version, with tracking; staging copy)
 #   ./build.sh web             -> docs/index.html                     (PUBLISH STEP ONLY: same file as web-v3)
 #   ./build.sh artifact-v3 F   -> F  (private claude.ai test page of the CrazyGames build)
@@ -13,7 +12,7 @@
 set -e
 cd "$(dirname "$0")"
 TARGET="${1:-}"
-USAGE="use: crazygames-v3 | preview-v3 | web-v3 | web | artifact-v3 <file> | artifact-web <file>"
+USAGE="use: crazygames-v3 | web-v3 | web | artifact-v3 <file> | artifact-web <file>"
 [ -z "$TARGET" ] && { echo "$USAGE"; exit 1; }
 
 # Storage: CrazyGames build saves under cg3_, website build under w3_. V1 saves on players' phones are
@@ -33,9 +32,9 @@ fi
 
 # V3 worlds builds (feature/worlds): own storage prefix cg3_, so they never touch any other saves.
 #   ./build.sh crazygames-v3 -> platform/crazygames-v3/index.html
-#   ./build.sh preview-v3    -> docs/crazygames-preview-v3/index.html (identical file)
-if [ "$TARGET" = "crazygames-v3" ] || [ "$TARGET" = "preview-v3" ]; then
-  if [ "$TARGET" = "crazygames-v3" ]; then OUT=platform/crazygames-v3; else OUT=docs/crazygames-preview-v3; fi
+# (No public preview page: testing uses the private claude.ai link, built with artifact-v3.)
+if [ "$TARGET" = "crazygames-v3" ]; then
+  OUT=platform/crazygames-v3
   mkdir -p "$OUT"
   "$0" crazygames-stdout | sed "s#<script>window.CLIFF_BUILD = 'crazygames';</script>#$CG_LINE#" > "$OUT/index.html"
   echo "built $OUT/index.html"

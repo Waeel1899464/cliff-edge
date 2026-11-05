@@ -10,8 +10,8 @@
 | النسخة | الحالة | أين هي |
 |---|---|---|
 | **V3 لـ CrazyGames** | أُرسلت في 2026-11-05، **تنتظر المراجعة** | `platform/crazygames-v3/index.html`، والملف المرسل نفسه: `dist/crazygames-v3-submitted-2026-11-05.html` |
-| **V3 للموقع** | جاهزة ومختبرة، **غير منشورة**، تنتظر موافقة صاحب المشروع | `platform/web-v3/index.html` |
-| V1 للموقع | **منشورة الآن** على https://waeel1899464.github.io/cliff-edge/ | فرع `main` (`docs/index.html`)، والنسخة الاحتياطية على الفرع `backup/web-v1` |
+| **V3 للموقع** | **منشورة منذ 2026-11-05** على https://waeel1899464.github.io/cliff-edge/ | `docs/index.html` (مطابق لـ `platform/web-v3/index.html`) |
+| V1 للموقع | أرشيف (كانت منشورة حتى 2026-11-05) | `archive/web-v1-backup/docs-index.html` والفرع `backup/web-v1` |
 | V1 لـ CrazyGames | أرشيف (لها معاينة منشورة قديمة) | `archive/platform-crazygames-v1/` والفرع `backup/cg-stable-a7` |
 | V2 (الدقة العادلة) | أرشيف (لها معاينة منشورة قديمة) | `archive/platform-crazygames-v2/` والفرع `feature/fair-precision` |
 | Merge Anything (لعبة ثانية) | متوقفة | الفرع `games/merge-anything` |
@@ -22,7 +22,7 @@
 | الفرع | ما فيه | هل نعدّل فيه؟ |
 |---|---|---|
 | `feature/worlds` | **V3: العمل الحالي** | ✅ نعم |
-| `main` | ما هو منشور على الموقع الآن | فقط عند النشر، وبموافقة صاحب المشروع |
+| `main` | ما هو منشور على الموقع الآن (V3) | فقط عند النشر، وبموافقة صاحب المشروع |
 | `backup/web-v1`, `backup/cg-stable-a7`, `feature/fair-precision` | نسخ احتياطية لـ V1 وV2 | ❌ لا |
 | `archive/trailers-v3-draft` | أول فيديوهات V3 (استُبدلت) | ❌ لا |
 | `games/merge-anything`, `research/ideas` | لعبة ثانية، وبحث | ❌ ليس الآن |
@@ -53,6 +53,7 @@
 | تشغيل كل الفحوصات | `sh tests/run-all.sh` | 178 فحصاً، كلها ناجحة (دقيقتان تقريباً) |
 | بناء نسخة CrazyGames | `./build.sh crazygames-v3` | |
 | بناء نسخة الموقع (للتجربة فقط) | `./build.sh web-v3` | |
+| بناء صفحة الموقع المنشورة | `./build.sh web` (ثم النشر بموافقة) | |
 | التأكد أن المنشور لم يتغير | `sh tools/check-protected.sh` | |
 | جداول صعوبة العوالم | `node tools/sim/sim.js --worlds` | |
 
@@ -69,14 +70,14 @@
 | أين | كيف |
 |---|---|
 | CrazyGames | لوحتهم في بوابة المطورين: عدد اللاعبين، ووقت اللعب، والعودة في اليوم التالي (تتحدث مرة كل يوم) |
-| الموقع (V3 بعد نشرها) | قاعدة بياناتنا (Supabase). أرقام مجهولة الهوية فقط، ومعرّفات لاعبي V3 تبدأ بـ `v3-`. الاستعلامات في `metrics/metrics-v3.sql` |
+| الموقع (V3) | قاعدة بياناتنا (Supabase). أرقام مجهولة الهوية فقط، ومعرّفات لاعبي V3 تبدأ بـ `v3-`. الاستعلامات في `metrics/metrics-v3.sql`. قاعدة البيانات عُدّلت لتقبل أحداث V3 (2026-11-05) |
 | نسخة CrazyGames | لا نرسل منها أي شيء |
 
-## خطوات نشر V3 على الموقع (لم تُنفذ، تحتاج موافقة)
+## نشر V3 على الموقع (تم في 2026-11-05 بموافقة صاحب المشروع)
 
-1. تطبيق `metrics/v3-allow-events.sql` على قاعدة البيانات (يضيف أسماء أحداث V3 المسموحة، ولا يحذف شيئاً).
-2. `./build.sh web` ثم نقل التغييرات إلى `main`. هذا هو النشر الفعلي.
-3. فتح الموقع على الهاتف والتأكد، ثم مراقبة الأرقام.
+1. طُبّق `metrics/v3-allow-events.sql` على قاعدة البيانات.
+2. `./build.sh web`، ثم نُقل فرع `feature/worlds` إلى `main`.
+3. للرجوع إلى V1 عند الحاجة: نضع `archive/web-v1-backup/docs-index.html` مكان `docs/index.html` على `main`.
 
 ## قواعد الحماية الدائمة
 
