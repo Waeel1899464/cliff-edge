@@ -21,7 +21,13 @@ const PLAY = `
     const s = window.__cliff();
     return { state: s.state, result: s.result, target: s.target, grade: s.grade, cleared: s.cleared, cliff: s.cliff, hearts: s.heartsLeft, backTo: s.backTo, newCp: s.newCp };
   };
-  window.__next = () => { window.__advance(400); window.__ptr('pointerdown', window.__T()); window.__ptr('pointerup', window.__T()); window.__frame(16); return window.__cliff(); };`;
+  window.__next = () => {
+    const s0 = window.__cliff();
+    window.__advance(400); window.__ptr('pointerdown', window.__T()); window.__ptr('pointerup', window.__T()); window.__frame(16);
+    // after a boss the tap opens the map travel to the next world: a second tap skips it (like a player)
+    if (window.__cliff() === s0 && s0.worldDone) { window.__ptr('pointerdown', window.__T()); window.__ptr('pointerup', window.__T()); window.__frame(16); }
+    return window.__cliff();
+  };`;
 
 (async () => {
   const srv = await serve(8793);

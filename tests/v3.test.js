@@ -23,7 +23,11 @@ const HELP = `
     }
     window.__frame(16);
   };
-  window.__next = () => { window.__advance(400); window.__tap(270, 600); };`;
+  window.__next = () => {
+    const s0 = window.__cliff();
+    window.__advance(400); window.__tap(270, 600);
+    if (window.__cliff() === s0 && s0.worldDone) window.__tap(270, 600);   // skip the map travel after a boss
+  };`;
 const seed = (cur, cp, best, extra = '') => IN_PAGE + HELP + `localStorage.setItem('cg3_cliff_cur','${cur}');localStorage.setItem('cg3_cliff_cp','${cp}');localStorage.setItem('cg3_cliff_bestcliff','${best}');localStorage.setItem('cg3_cliff_rounds','10');${extra}`;
 
 (async () => {
@@ -329,6 +333,39 @@ const seed = (cur, cp, best, extra = '') => IN_PAGE + HELP + `localStorage.setIt
       await page.reload(); await page.waitForFunction(() => typeof window.__cliff === 'function');
       const r = await page.evaluate(() => { window.__frame(16); const before = window.__cliff().helper; window.__tap(270 - 118, 392); return { stuck: JSON.parse(localStorage.getItem('cg3_cliff_stuck')), used: window.__cliff().helper }; });
       check('helpers: 2 failures in a row are remembered after closing the game; the helper can be used', r.stuck.n === 3 && r.stuck.fails === 2 && r.used === 'ball', JSON.stringify(r.stuck));
+      await ctx.close();
+    }
+    // ---- moving to a new world: map travel, then the new world's card ----
+    {
+      const { page, ctx, errors } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(10, 6, 10) });
+      const r = await page.evaluate(() => {
+        const out = {};
+        window.__play(window.__cliff().target * 0.4);
+        const boss = window.__cliff();
+        window.__advance(400); window.__tap(270, 600);                     // first tap after the boss
+        out.mapShown = window.__cliff() === boss;                           // still the boss round: the map travel plays
+        for (let i = 0; i < 150; i++) window.__frame(16);                   // ~2.4 s: it continues by itself
+        const s = window.__cliff();
+        out.newWorld = s !== boss && s.cliff === 11 && s.state === 'ready' && !!s.worldIntroAt;
+        out.desert = s.spec.si === 3 && s.spec.wind > 0;                     // 2-1 shows sand and wind at once
+        // the card shows once per session: back to 2-1 again later -> no card
+        window.__play(-999); window.__next(); window.__play(-999); window.__next(); window.__play(-999); window.__next();
+        out.onceOnly = window.__cliff().cliff === 11 && !window.__cliff().worldIntroAt;
+        return out;
+      });
+      check('after a boss: the next tap shows the map travel; it continues by itself to the new world', r.mapShown && r.newWorld);
+      check('new world: its card shows once per session; the first desert cliff shows sand and wind', r.desert && r.onceOnly);
+      check('no page errors (world change)', errors.length === 0, errors.join(' | '));
+      await ctx.close();
+    }
+    {
+      const { page, ctx } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(10, 6, 10) });
+      const r = await page.evaluate(() => {
+        window.__play(window.__cliff().target * 0.4); const boss = window.__cliff();
+        window.__advance(400); window.__tap(270, 600); window.__frame(16); window.__tap(270, 600);   // skip with a tap
+        return window.__cliff() !== boss && window.__cliff().cliff === 11;
+      });
+      check('the map travel can be skipped with one tap', r);
       await ctx.close();
     }
   } finally { await b.close(); srv.close(); }

@@ -410,7 +410,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       spec(Object.assign({}, CURATED[8], { slope: 0.08 })),          //  9 phase 4: long road
       spec({ si: 0, dist: 16, vmax: 8, slope: 0.1, boss: true }),    // 10 phase 5, the final hit: long steep downhill
       // World 2: Desert — wind (constant, shown by arrows and the flag) and sand. si 3 = SAND.
-      spec({ si: 0, dist: 10, vmax: 7,   wind: -0.5 }),             // 11 checkpoint: a light head wind on road
+      spec({ si: 3, dist: 10, vmax: 7,   wind: 0.6 }),              // 11 checkpoint: the desert from the first second: sand and a visible tail wind
       spec({ si: 3, dist: 11, vmax: 7 }),                           // 12 first sand, no wind
       spec({ si: 0, dist: 12, vmax: 7.5, wind: 0.6 }),              // 13 first tail wind: slides further
       spec({ si: 3, dist: 12, vmax: 8,   wind: -0.8 }),             // 14 sand with a head wind
@@ -887,9 +887,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     particles = [];
     // a boss battle starts (arriving at phase 1, or sent back to it): short intro
     if (storyRound() && !s.replay && inArena(s.cliff) && arenaPhase(s.cliff) === 1 && lastRoundCliff !== s.cliff) s.introAt = performance.now();
+    if (storyRound() && !s.replay && s.world >= 2 && (s.cliff - 1) % 10 === 0 && !worldIntroShown[s.world]) { s.worldIntroAt = performance.now(); worldIntroShown[s.world] = true; }
     lastRoundCliff = s.cliff;
   }
   let lastRoundCliff = null;
+  const worldIntroShown = {};   // the new-world card shows once per session per world
+  const WORLD_NEW = { 2: 'NEW: WIND & SAND', 3: 'NEW: ICE PATCHES & FOG', 4: 'NEW: LOW GRAVITY', 5: 'NEW: CRUMBLING EDGE & QUAKES' };
   newRound();
   Track.send(friend ? 'challenge_open' : 'open', roundsPlayed);
 
@@ -931,7 +934,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   // The one game action, shared by touch, mouse and keyboard: start driving, or start the next round.
   function pressGame(id, t) {
     const now = performance.now();
-    if (screen === 'map') { closeMap(null); return; }        // keyboard on the map = PLAY
+    if (screen === 'map') { if (mapAnim) endMapAnim(); else closeMap(null); return; }   // keyboard on the map = PLAY
     if (s.state === 'ready') {
       // A daily screen opened before midnight (UTC) shows yesterday's cliff: switch to today's
       // cliff first, without using a try. The player presses again to play it.
@@ -959,6 +962,10 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       if (s.rescue && s.rescue.state === 'offer') declineRescue();
       if (s.replay && s.cleared) replay = null;              // replay done: back to your story cliff
       if (s.endless && s.runOver) endless = newRun();         // instant new run
+      if (s.worldDone && !s.replay && s.world < 5) {            // a world beaten: show the way to the next one
+        mapAnim = { from: s.cliff, to: s.cliff + 1, world: s.world + 1, t0: performance.now() };
+        screen = 'map'; return;
+      }
       newRound();
     }
   }
@@ -2473,6 +2480,21 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (teeth && (mood === 'angry' || mood === 'furious')) { ctx.fillStyle = '#ffffff'; ctx.fillRect(cx - 12, ey + 31, 7, 7); ctx.fillRect(cx + 5, ey + 31, 7, 7); }
     ctx.restore();
   }
+  // New world card (worlds 2-5): the world's name and what is new (any tap still starts driving).
+  function drawWorldIntro() {
+    const k = (performance.now() - s.worldIntroAt) / 2200;
+    if (!(k >= 0 && k < 1) || s.state !== 'ready') return;
+    const a = k < 0.12 ? k / 0.12 : k > 0.78 ? (1 - k) / 0.22 : 1, sc = 0.9 + 0.1 * Math.min(1, k / 0.12);
+    ctx.save(); ctx.globalAlpha = a;
+    const Z = zoneOf(s);
+    ctx.fillStyle = 'rgba(10,10,25,0.72)'; ctx.fillRect(0, 372, W, 186);
+    ctx.fillStyle = Z.sky[1]; ctx.fillRect(0, 372, W, 5); ctx.fillRect(0, 553, W, 5);
+    ctx.translate(W / 2, 465); ctx.scale(sc, sc); ctx.translate(-W / 2, -465);
+    text(`WORLD ${s.world}`, W / 2, 410, 24, '#ffd23f', 900);
+    text(Physics.WORLDS[s.world - 1].name, W / 2, 462, 50, '#ffffff', 900);
+    text(WORLD_NEW[s.world] || '', W / 2, 516, 22, '#7ef9ff', 900);
+    ctx.restore();
+  }
   // Short intro when a boss battle starts (any tap still starts driving at once).
   function drawBossIntro() {
     const k = (performance.now() - s.introAt) / 1800;
@@ -2539,7 +2561,13 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     const next = n && n !== cliff ? n : null;
     if (next !== replay || s.state !== 'ready' || s.daily) { replay = next; mode = 'run'; newRound(); }
   }
+  // Travel to the next world on the map (after a boss): the car drives along, the new world's lock
+  // breaks. About 2.2 s; any tap skips it. Then the new world starts (with its intro card).
+  let mapAnim = null;
+  const MAP_ANIM_MS = 2200;
+  function endMapAnim() { mapAnim = null; closeMap(null); if (s.worldDone) newRound(); }
   function mapTap(lx, ly) {
+    if (mapAnim) { endMapAnim(); return; }
     if (inBtn(MAP_PLAY, lx, ly)) { closeMap(null); return; }
     for (const nd of mapNodes()) {
       if (Math.hypot(lx - nd.x, ly - nd.y) < 22 && nd.n <= Math.min(bestCliff, Physics.CLIFFS.length)) { closeMap(nd.n); return; }
@@ -2560,15 +2588,30 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     text('SHOP · SOON', sb.x, sb.y + 1, 14, 'rgba(255,255,255,0.45)', 900);
     const nodes = mapNodes();
     for (let w = 0; w < 5; w++) {
-      const L = WORLD_LOOKS[w], y0 = 150 + w * 136, open = bestCliff >= w * 10 + 1;
+      const L = WORLD_LOOKS[w], y0 = 150 + w * 136;
+      const unlocking = mapAnim && mapAnim.world === w + 1;
+      const ak = unlocking ? Math.min(1, (performance.now() - mapAnim.t0) / MAP_ANIM_MS) : 1;
+      const open = bestCliff >= w * 10 + 1 && (!unlocking || ak > 0.55);
       const cg = ctx.createLinearGradient(0, y0, 0, y0 + 124);
       cg.addColorStop(0, L.sky[0]); cg.addColorStop(1, L.sky[1]);
       ctx.save(); ctx.globalAlpha = open ? 1 : 0.35;
       ctx.fillStyle = cg; ctx.beginPath(); ctx.roundRect(14, y0, W - 28, 124, 18); ctx.fill();
       let ws = 0; for (let k = 1; k <= 10; k++) ws += stars[w * 10 + k] || 0;
       text(`${w + 1}. ${Physics.WORLDS[w].name}`, 30, y0 + 22, 18, '#ffffff', 900, 'left');
-      text(open ? `★ ${ws}/30` : 'LOCKED', W - 30, y0 + 22, 16, open ? '#ffe27a' : '#ffffff', 900, 'right');
+      text(open ? (unlocking ? 'UNLOCKED!' : `★ ${ws}/30`) : 'LOCKED', W - 30, y0 + 22, 16, open ? '#ffe27a' : '#ffffff', 900, 'right');
       ctx.restore();
+      if (unlocking && ak <= 0.55) {        // the lock shakes, then breaks
+        const sh = Math.sin(performance.now() / 30) * 5 * (ak / 0.55);
+        ctx.save(); ctx.translate(W / 2 + sh, y0 + 66);
+        ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(0, -10, 13, Math.PI, 0); ctx.stroke();
+        ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.roundRect(-20, -10, 40, 32, 6); ctx.fill();
+        ctx.restore();
+      } else if (unlocking && ak < 0.8) {
+        const k2 = (ak - 0.55) / 0.25;
+        ctx.save(); ctx.globalAlpha = 1 - k2; ctx.fillStyle = '#ffd23f';
+        ctx.beginPath(); ctx.roundRect(W / 2 - 20 - k2 * 30, y0 + 56 + k2 * 40, 18, 32, 6); ctx.roundRect(W / 2 + 2 + k2 * 30, y0 + 56 + k2 * 40, 18, 32, 6); ctx.fill();
+        ctx.restore();
+      }
     }
     for (const nd of nodes) {
       const reached = nd.n <= bestCliff, here = nd.n === cliff, boss = nd.k === 9;
@@ -2582,7 +2625,18 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       const st = stars[nd.n] || 0;
       for (let i = 0; i < 3; i++) { starPath(nd.x + (i - 1) * 12, nd.y + 29, 5.5); ctx.fillStyle = i < st ? '#ffd23f' : 'rgba(10,10,25,0.45)'; ctx.fill(); }
       ctx.restore();
-      if (here) { ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(nd.x, nd.y, 22, 0, Math.PI * 2); ctx.stroke(); }
+      if (here && !mapAnim) { ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(nd.x, nd.y, 22, 0, Math.PI * 2); ctx.stroke(); }
+    }
+    if (mapAnim) {
+      // the little car drives from the beaten boss to the first cliff of the new world
+      const a = nodes[mapAnim.from - 1], z = nodes[mapAnim.to - 1];
+      const k = Math.min(1, (performance.now() - mapAnim.t0) / MAP_ANIM_MS), e = k < 0.15 ? 0 : Math.min(1, (k - 0.15) / 0.55);
+      const ee = e * e * (3 - 2 * e);
+      const x = a.x + (z.x - a.x) * ee, y = a.y + (z.y - a.y) * ee - Math.sin(ee * Math.PI) * 60 - 26;
+      ctx.save(); ctx.translate(x, y); ctx.scale(0.5, 0.5); drawBody(false, 'happy'); ctx.restore();
+      if (k > 0.7) { ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(z.x, z.y, 22 + Math.sin(performance.now() / 120) * 2, 0, Math.PI * 2); ctx.stroke(); }
+      text(`WORLD ${mapAnim.world} · ${Physics.WORLDS[mapAnim.world - 1].name}`, W / 2, 836, 22, '#ffd23f', 900);
+      if (k >= 1) endMapAnim();
     }
     // PLAY: back to your story cliff
     const b = MAP_PLAY;
@@ -2591,7 +2645,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.font = '900 28px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#12141f';
     ctx.fillText(storyDone() ? 'PLAY ENDLESS' : 'PLAY ' + cliffLabel(cliff).replace('CLIFF ', ''), b.x, b.y + 1);
-    if (storyDone()) text(`ENDLESS BEST ${endlessBest} · tap a cliff to replay it`, W / 2, 836, 16, '#7ef9ff', 800);
+    if (mapAnim) { /* the travel title is drawn instead */ }
+    else if (storyDone()) text(`ENDLESS BEST ${endlessBest} · tap a cliff to replay it`, W / 2, 836, 16, '#7ef9ff', 800);
     else text('Tap a cliff you reached to replay it for stars', W / 2, 836, 16, 'rgba(255,255,255,0.7)', 700);
   }
 
@@ -2886,6 +2941,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       text(endHint(s.endless ? 'TAP FOR A NEW RUN' : `TAP TO RETRY ${cliffLabel(s.replay ? s.cliff : cliff)}`, 'TAP TO TRY AGAIN'), W / 2, 900, 26, '#ffffff', 700);
     }
     if (s.introAt) drawBossIntro();
+    if (s.worldIntroAt) drawWorldIntro();
     if (rescueBtnVisible()) drawRescueBtn();
     if (helperVisible()) drawHelpers();
     if (doubleVisible()) {
