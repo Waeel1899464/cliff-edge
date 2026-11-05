@@ -249,8 +249,8 @@ const PLAY = `
       check('H: first fall full (0.45 s slow motion, 0.9 s end), later falls shorter (0.2 s, 0.45 s)', z.fall[0].slow === 0.45 && z.fall[0].end === 0.9 && z.fall[1].slow === 0.2 && z.fall[2].end === 0.45, JSON.stringify(z.fall) + ' cliff ' + z.cliff);
       check('no page errors (zones, falls)', errors.length === 0, errors.join('|'));
       // quick retry: during a fall, a tap after 0.3 s starts the next round
-      const q = await page.evaluate(() => { const s0 = window.__cliff(); const tp = window.__T(); window.__ptr('pointerdown', tp); for (let i = 0; i < 400 && window.__cliff().state !== 'falling'; i++) window.__frame(16); window.__frame(16); for (let i = 0; i < 20; i++) window.__frame(16); window.__ptr('pointerdown', window.__T()); window.__ptr('pointerup', window.__T()); return window.__cliff().state; });
-      check('H: tap during a fall (after 0.3 s) → next round right away', q === 'ready', q);
+      const q = await page.evaluate(() => { localStorage.setItem('cg3_cliff_rewards', JSON.stringify({ day: new Date(Date.now()).toISOString().slice(0, 10), rescue: 2 })); /* no rescue offer here: plain quick retry */ const s0 = window.__cliff(); const tp = window.__T(); window.__ptr('pointerdown', tp); for (let i = 0; i < 400 && window.__cliff().state !== 'falling'; i++) window.__frame(16); window.__frame(16); for (let i = 0; i < 20; i++) window.__frame(16); window.__ptr('pointerdown', window.__T()); window.__ptr('pointerup', window.__T()); return window.__cliff().state; });
+      check('H: tap during a fall (after 0.3 s, no rescue offered) → next round right away', q === 'ready', q);
       await ctx.close();
     }
 

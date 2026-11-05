@@ -300,6 +300,37 @@ const seed = (cur, cp, best, extra = '') => IN_PAGE + HELP + `localStorage.setIt
       check('no page errors (Endless)', errors.length === 0, errors.join(' | '));
       await ctx.close();
     }
+    // ---- SAVE ME at the moment of the loss, protected second, failures remembered, NEW! badges ----
+    {
+      const { page, ctx, errors } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(7, 6, 7, "localStorage.setItem('cg3_cliff_hearts','1');") });
+      const r = await page.evaluate(() => {
+        const out = {};
+        const tp = window.__T(); window.__ptr('pointerdown', tp);
+        for (let i = 0; i < 3000 && window.__cliff().state !== 'falling'; i++) window.__frame(16);
+        out.atOnce = !!(window.__cliff().rescue && window.__cliff().rescue.t0 !== null);   // visible as the car goes over
+        for (let i = 0; i < 37; i++) window.__frame(16);                                     // ~0.6 s later: a quick retry tap
+        window.__tap(270, 700);
+        out.protected = window.__cliff().cliff === 7 && window.__cliff().rescue && window.__cliff().rescue.state === 'offer';
+        for (let i = 0; i < 30; i++) window.__frame(16);                                     // after the first second
+        window.__tap(270, 700);
+        out.skipAfter = window.__cliff().cliff === 6;                                         // no rescue: back to the checkpoint
+        out.seenSaved = JSON.parse(localStorage.getItem('cg3_cliff_seen') || '{}').rescue === true;
+        return out;
+      });
+      check('SAVE ME appears at the moment the car goes over the edge (not after the splash)', r.atOnce);
+      check('SAVE ME: a quick tap in its first second does not hide it; after that a tap skips it as before', r.protected && r.skipAfter);
+      check('NEW! badge: remembered after the first time it was shown', r.seenSaved);
+      check('no page errors (SAVE ME timing)', errors.length === 0, errors.join(' | '));
+      await ctx.close();
+    }
+    {
+      const { page, ctx } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(3, 1, 3) });
+      await page.evaluate(() => { window.__play(-999); window.__next(); window.__play(-999); window.__next(); });
+      await page.reload(); await page.waitForFunction(() => typeof window.__cliff === 'function');
+      const r = await page.evaluate(() => { window.__frame(16); const before = window.__cliff().helper; window.__tap(270 - 118, 392); return { stuck: JSON.parse(localStorage.getItem('cg3_cliff_stuck')), used: window.__cliff().helper }; });
+      check('helpers: 2 failures in a row are remembered after closing the game; the helper can be used', r.stuck.n === 3 && r.stuck.fails === 2 && r.used === 'ball', JSON.stringify(r.stuck));
+      await ctx.close();
+    }
   } finally { await b.close(); srv.close(); }
   process.exit(summary() ? 1 : 0);
 })();

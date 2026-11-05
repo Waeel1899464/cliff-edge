@@ -746,7 +746,13 @@
     onGranted();
     return true;
   }
-  let stuck = { n: 0, fails: 0 };               // failures in a row on the same story cliff (this session)
+  // failures in a row on the same story cliff (saved on the device, so helpers still show after reopening)
+  let stuck = (() => { const v = loadJSON('cliff_stuck'); return v && Number.isFinite(v.n) && Number.isFinite(v.fails) ? v : { n: 0, fails: 0 }; })();
+  function addFail(n) { stuck = stuck.n === n ? { n, fails: stuck.fails + 1 } : { n, fails: 1 }; saveJSON('cliff_stuck', stuck); }
+  // "NEW!" the first time each bonus button is shown (remembered on the device)
+  const seen = loadJSON('cliff_seen') || {};
+  const seenNow = {};
+  function isNew(kind) { seenNow[kind] = true; return !seen[kind]; }
   let rescueCount = 0;
   const RESCUES = ['rewind', 'balloon', 'seagull', 'parachute'];
   const HELPERS = [
@@ -813,6 +819,7 @@
     return key in targetCache ? targetCache[key] : (targetCache[key] = Physics.storyTarget(n, sp));
   }
   function newRound() {
+    if (Object.keys(seenNow).some(k => !seen[k])) { Object.assign(seen, seenNow); saveJSON('cliff_seen', seen); }
     // Rounded to the millimetre so a challenge link reproduces the round exactly.
     let si = Math.floor(Math.random() * 3);   // the three V2 grounds
     let dist = Math.round((8 + Math.random() * 5) * 1000) / 1000;   // meters from car front to edge
@@ -930,7 +937,10 @@
     }
     if (s.rescue && s.rescue.state === 'anim') return;
     if ((s.state === 'stopped' || s.state === 'fell' || s.state === 'falling') && now - s.endAt > 300) {
-      if (s.rescue && s.rescue.state === 'offer') declineRescue();   // any other tap: no rescue, instant retry
+      // SAVE ME: for its first second a tap elsewhere is ignored (so a quick retry tap cannot hide it
+      // before it is seen); after that any other tap means "no rescue" and retries at once
+      if (s.rescue && s.rescue.state === 'offer' && now - s.rescue.t0 < 1000) return;
+      if (s.rescue && s.rescue.state === 'offer') declineRescue();
       if (s.replay && s.cleared) replay = null;              // replay done: back to your story cliff
       if (s.endless && s.runOver) endless = newRun();         // instant new run
       newRound();
@@ -1559,10 +1569,10 @@
   // A missed cliff: lose a heart and retry it; with no hearts left, go back to the checkpoint.
   function missCliff() {
     s.missed = true;
-    stuck = stuck.n === s.cliff ? { n: s.cliff, fails: stuck.fails + 1 } : { n: s.cliff, fails: 1 };
+    addFail(s.cliff);
     // The last heart is about to go: offer a rescue first (story mode only). Nothing changes until the
     // player chooses: "Save me!" keeps the heart; any other tap (or 3 seconds) goes back as usual.
-    if (hearts <= 1 && rescueAllowed()) { s.rescue = { state: 'offer', t0: null }; s.heartsLeft = 0; return; }
+    if (hearts <= 1 && rescueAllowed()) { s.rescue = { state: 'offer', t0: performance.now() }; s.heartsLeft = 0; return; }   // shown at once
     applyMiss();
   }
   function endRun() {
@@ -1588,7 +1598,7 @@
     rememberTry(false);
     fallsThisSession++;
     s.fallTiming = fallsThisSession === 1 ? FALL_FULL : FALL_SHORT;
-    if (s.endless) endRun(); else if (!s.friend && !s.daily) { if (s.replay) { s.missed = true; stuck = stuck.n === s.cliff ? { n: s.cliff, fails: stuck.fails + 1 } : { n: s.cliff, fails: 1 }; } else missCliff(); }
+    if (s.endless) endRun(); else if (!s.friend && !s.daily) { if (s.replay) { s.missed = true; addFail(s.cliff); } else missCliff(); }
     s.state = 'falling';
     s.endAt = performance.now();
     s.fallT = 0;
@@ -1718,7 +1728,7 @@
             s.stars = STAR_OF[s.grade];
             if (s.stars > (stars[s.cliff] || 0)) { stars[s.cliff] = s.stars; s.newStars = true; saveJSON('cliff_stars', stars); }
             s.coinsWon = coinReward(s.result, s.target, s.grade);
-            stuck = { n: 0, fails: 0 };
+            stuck = { n: 0, fails: 0 }; saveJSON('cliff_stuck', stuck);
             coins += s.coinsWon; save('cliff_coins', coins);
             if (!s.replay) {
               if (s.spec.boss) s.worldDone = true;
@@ -1734,7 +1744,7 @@
             puff(EDGE_X - 30, GROUND_Y - 40, 20, '#ff4f7b', 160, 380, 4, 1.1);
           } else if (s.replay) {
             s.missed = true;
-            stuck = stuck.n === s.cliff ? { n: s.cliff, fails: stuck.fails + 1 } : { n: s.cliff, fails: 1 };
+            addFail(s.cliff);
           } else {
             missCliff();
           }
@@ -1753,7 +1763,6 @@
     if (s.rescue) {
       const R = s.rescue;
       if (R.state === 'offer') {
-        if (R.t0 === null && roundEnded()) R.t0 = now;
         if (R.t0 !== null && now - R.t0 > 3000) declineRescue();
       } else if (R.state === 'anim' && R.kind === 'rewind' && !s.parts) {
         const k = Math.min(1, (now - R.t0) / (R.dur * 1000));
@@ -2256,6 +2265,13 @@
     ctx.font = `900 ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = ink; ctx.fillText(label, b.x, b.y + 1);
   }
+  function drawNewBadge(x, y) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(0.18);
+    ctx.fillStyle = '#ff3355'; ctx.beginPath(); ctx.roundRect(-24, -11, 48, 22, 11); ctx.fill();
+    ctx.font = '900 13px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff'; ctx.fillText('NEW!', 0, 1);
+    ctx.restore();
+  }
   function drawRescueBtn() {
     const b = RESCUE_BTN, left = Math.max(0, 1 - (performance.now() - s.rescue.t0) / 3000);
     const pulse = 1 + 0.04 * Math.sin(performance.now() / 90);
@@ -2266,9 +2282,12 @@
     ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 5; ctx.lineCap = 'round';
     ctx.beginPath(); ctx.arc(b.x + b.w / 2 + 30, b.y, 18, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left); ctx.stroke();
     text(`${rewardLeft('rescue')} left today`, b.x, b.y + 54, 15, 'rgba(255,255,255,0.75)', 800);
+    if (isNew('rescue')) drawNewBadge(b.x + b.w / 2 - 6, b.y - b.h / 2 - 2);
   }
   function drawHelpers() {
     text('STUCK? ONE HELPER FOR ONE TRY', W / 2, 340, 16, '#ffffff', 900);
+    text(`${rewardLeft('helper')} left today`, W / 2, 446, 13, 'rgba(255,255,255,0.75)', 800);
+    if (isNew('helper')) drawNewBadge(W / 2 + 160, 332);
     HELPERS.forEach((h, i) => {
       const b = helperBtn(i);
       ctx.fillStyle = 'rgba(10,10,25,0.55)'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, 18); ctx.fill();
@@ -2814,9 +2833,20 @@
     if (s.introAt) drawBossIntro();
     if (rescueBtnVisible()) drawRescueBtn();
     if (helperVisible()) drawHelpers();
-    if (doubleVisible()) drawPillBtn(DOUBLE_BTN, 'DOUBLE COINS', '#ffd23f', '#12141f', 18);
-    if (heartBtnVisible()) drawPillBtn(HEART_BTN, '+1 ♥', '#ff4f7b', '#ffffff', 18);
-    if (boxVisible()) drawPillBtn(BOX_BTN, 'OPEN MYSTERY BOX', '#7ef9ff', '#12141f', 18);
+    if (doubleVisible()) {
+      drawPillBtn(DOUBLE_BTN, 'DOUBLE COINS', '#ffd23f', '#12141f', 18);
+      text(`${rewardLeft('double')} left today`, DOUBLE_BTN.x, DOUBLE_BTN.y + 36, 13, 'rgba(255,255,255,0.75)', 800);
+      if (isNew('double')) drawNewBadge(DOUBLE_BTN.x + DOUBLE_BTN.w / 2 - 4, DOUBLE_BTN.y - DOUBLE_BTN.h / 2);
+    }
+    if (heartBtnVisible()) {
+      drawPillBtn(HEART_BTN, '+1 ♥', '#ff4f7b', '#ffffff', 18);
+      text('1 a day', HEART_BTN.x, HEART_BTN.y + 30, 12, 'rgba(255,255,255,0.75)', 800);
+      if (isNew('heart')) drawNewBadge(HEART_BTN.x + HEART_BTN.w / 2 - 2, HEART_BTN.y - HEART_BTN.h / 2);
+    }
+    if (boxVisible()) {
+      drawPillBtn(BOX_BTN, 'OPEN MYSTERY BOX', '#7ef9ff', '#12141f', 18);
+      if (isNew('box')) drawNewBadge(BOX_BTN.x + BOX_BTN.w / 2 - 4, BOX_BTN.y - BOX_BTN.h / 2);
+    }
     if (s.boxCoins) { drawCoin(W / 2 - 50, 452, 12); text('+' + s.boxCoins + ' FROM THE BOX', W / 2 - 32, 453, 20, '#7ef9ff', 900, 'left'); }
     if (s.heartWon) text('GOLDEN HEART! +1 ♥', W / 2, 512, 20, '#ffd23f', 900);
     if (s.allDone && s.state === 'stopped') {
