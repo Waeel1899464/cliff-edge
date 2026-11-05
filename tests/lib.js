@@ -67,4 +67,4 @@ const IN_PAGE = `
     window.dispatchEvent(ev);
   };`;
 
-module.exports = { chromium, serve, check, summary, open, IN_PAGE, ROOT };
+module.exports = { chromium, serve, check, summary, open, IN_PAGE, ROOT, MANUAL_CLOCK };

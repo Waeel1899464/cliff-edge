@@ -590,9 +590,9 @@
   // original names unchanged. No data is moved or deleted.
   // An experimental build may set its own prefix (window.CLIFF_STORE_PREFIX, e.g. 'cg2_') so it is
   // isolated from both of the others too. Only short lowercase prefixes are accepted.
-  const STORE_PREFIX = IS_PORTAL
-    ? (typeof window.CLIFF_STORE_PREFIX === 'string' && /^[a-z0-9_]{1,8}$/.test(window.CLIFF_STORE_PREFIX) ? window.CLIFF_STORE_PREFIX : 'cg_')
-    : '';
+  // The V3 website build sets 'w3_' too: website players start V3 fresh and their V1 saves stay untouched.
+  const OWN_PREFIX = typeof window.CLIFF_STORE_PREFIX === 'string' && /^[a-z0-9_]{1,8}$/.test(window.CLIFF_STORE_PREFIX) ? window.CLIFF_STORE_PREFIX : null;
+  const STORE_PREFIX = OWN_PREFIX !== null ? OWN_PREFIX : IS_PORTAL ? 'cg_' : '';
   function storeKey(key) { return STORE_PREFIX + key; }
   function load(key, fallback) { try { const v = localStorage.getItem(storeKey(key)); return v === null ? fallback : parseFloat(v); } catch (e) { return fallback; } }
   function save(key, v) { try { localStorage.setItem(storeKey(key), String(v)); } catch (e) {} }
@@ -648,19 +648,31 @@
   let shake = 0;
 
   let roundCounter = 0;
-  // A friend's challenge link (?c=surface-distance-speed&s=score) replays the exact same cliff.
+  // A friend's challenge link replays the exact same cliff, twists included:
+  //   ?c=n12&s=..         story cliff 12 (wind, sand, ice, fog, low gravity, crumbling edge, quakes)
+  //   ?c=eSEED.7&s=..     Endless cliff 7 of the run SEED
+  //   ?c=si-dist-speed&s=.. a plain cliff (daily challenge, and links made by V1)
   // Values come from a link anyone can edit, so each is checked against the normal ranges.
   const FRIEND_TRIES = 3;
   let friend = null;
   try {
     const q = new URLSearchParams(location.search);
-    const c = (q.get('c') || '').split('-').map(Number);
+    const raw = q.get('c') || '';
+    const c = raw.split('-').map(Number);
     const sc = q.get('s');
-    if (!IS_PORTAL && c.length === 3 && c.every(Number.isInteger)) {   // platform build: no external challenge links
+    const score = sc === 'x' ? null : Number(sc) / 10;
+    const okScore = sc === 'x' || (sc !== null && Number.isFinite(score) && score >= 0 && score <= 1300);
+    const mN = /^n([0-9]{1,3})$/.exec(raw), mE = /^e([a-z0-9]{1,10})\.([0-9]{1,3})$/.exec(raw);
+    if (IS_PORTAL) { /* platform build: no external challenge links */ }
+    else if (mN && okScore && +mN[1] >= 1 && +mN[1] <= Physics.CLIFFS.length) {
+      const sp = Physics.cliffSpec(+mN[1]);
+      friend = { si: sp.si, dist: sp.dist, vmax: sp.vmax, n: +mN[1], score, tries: 0, won: false };
+    } else if (mE && okScore) {
+      const sp = Physics.endlessSpec(mE[1], +mE[2]);
+      friend = { si: sp.si, dist: sp.dist, vmax: sp.vmax, e: { seed: mE[1], i: +mE[2] }, score, tries: 0, won: false };
+    } else if (c.length === 3 && c.every(Number.isInteger)) {
       const si = c[0], dist = c[1] / 1000, vmax = c[2] / 1000;
-      const score = sc === 'x' ? null : Number(sc) / 10;
       const okRound = si >= 0 && si < 3 && dist >= 8 && dist <= 13 && vmax >= 6 && vmax <= 9;
-      const okScore = sc === 'x' || (sc !== null && Number.isFinite(score) && score >= 0 && score <= 1300);
       if (okRound && okScore) friend = { si, dist, vmax, score, tries: 0, won: false };
     }
   } catch (e) {}
@@ -713,10 +725,13 @@
     const KEY = 'sb_publishable_fRMxd1l7QJ0Rj5Tvysw1jg_I60GWXjT';
     const on = !IS_PORTAL && (location.hostname === 'waeel1899464.github.io' || /[?&]track=1/.test(location.search));
     const rid = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
+    // A version build (window.CLIFF_VERSION, e.g. 'v3') marks its ids 'v3-…' so its players can be
+    // counted apart from the older versions in the same table.
+    const VER = typeof window.CLIFF_VERSION === 'string' && /^v[0-9]{1,2}$/.test(window.CLIFF_VERSION) ? window.CLIFF_VERSION + '-' : '';
     let device = null;
-    try { device = localStorage.getItem(storeKey('cliff_dev')); if (!device) { device = rid(); localStorage.setItem(storeKey('cliff_dev'), device); } } catch (e) {}
-    if (!device) device = rid();
-    const session = rid();
+    try { device = localStorage.getItem(storeKey('cliff_dev')); if (!device) { device = VER + rid(); localStorage.setItem(storeKey('cliff_dev'), device); } } catch (e) {}
+    if (!device) device = VER + rid();
+    const session = VER + rid();
     function send(event, value = null) {
       if (!on) return;
       try {
@@ -828,6 +843,7 @@
     if (friend && !friend.won && friend.tries < FRIEND_TRIES) {
       friend.tries++;
       fr = friend; si = fr.si; dist = fr.dist; vmax = fr.vmax;
+      if (fr.n) sp = Physics.cliffSpec(fr.n); else if (fr.e) sp = Physics.endlessSpec(fr.e.seed, fr.e.i);
     } else if (mode === 'daily' && dailyLeft() > 0) {
       daily = true;
       ({ si, dist, vmax } = dailyParams());
@@ -853,8 +869,8 @@
       daily, dailyDay: daily ? dayKey() : null, dailyTry: 0, newDailyBest: false, layoutKey, releaseFront: null,
       cliff: mode === 'endless' && !daily && !fr ? 1000 + endless.i : replay || cliff, replay: !!replay,
       endless: mode === 'endless' && !daily && !fr, runOver: false,
-      target: mode === 'endless' && !daily && !fr ? Physics.endlessTarget(endless.i, sp) : storyTargetCached(replay || cliff, sp), grade: null, stars: 0, newStars: false, coinsWon: 0, spec: sp, plan: null, surfNow: surface,
-      world: mode === 'endless' && !daily && !fr ? endlessLook(sp) : Physics.worldOf(replay || cliff), worldDone: false, cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
+      target: fr && fr.n ? storyTargetCached(fr.n, sp) : fr && fr.e ? Physics.endlessTarget(fr.e.i, sp) : mode === 'endless' && !daily && !fr ? Physics.endlessTarget(endless.i, sp) : storyTargetCached(replay || cliff, sp), grade: null, stars: 0, newStars: false, coinsWon: 0, spec: sp, plan: null, surfNow: surface,
+      world: fr && fr.n ? Physics.worldOf(fr.n) : fr && fr.e ? endlessLook(sp) : mode === 'endless' && !daily && !fr ? endlessLook(sp) : Physics.worldOf(replay || cliff), worldDone: false, cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
       vmax,
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
       x0: EDGE_X / PPM - dist - CAR_LEN, dist,
@@ -934,7 +950,7 @@
       s.tPress = t === undefined ? now : t;
       s.crossAt = s.tPress + realOf(Physics.holdTimeForS(Physics.edgeAt(s.spec, Infinity), s.spec)) * 1000;   // still holding then = over the edge
       roundsPlayed++; save('cliff_rounds', roundsPlayed);
-      Track.send(s.daily ? 'daily' : 'round', s.daily ? s.dailyTry : s.cliff);
+      if (s.endless) Track.send('endless_round', endless.i); else Track.send(s.daily ? 'daily' : 'round', s.daily ? s.dailyTry : s.cliff);
       Rec.start(s.id);
       return;
     }
@@ -1363,7 +1379,11 @@
   function challengeUrl() {
     const p = s.params;
     const score = s.result === null ? 'x' : String(Math.round(s.result * 10));
-    return `${GAME_URL}?c=${p.si}-${Math.round(p.dist * 1000)}-${Math.round(p.vmax * 1000)}&s=${score}`;
+    const f = s.friend;
+    const c = f && f.n ? 'n' + f.n : f && f.e ? `e${f.e.seed}.${f.e.i}`
+      : s.daily || f || !ASSIST ? `${p.si}-${Math.round(p.dist * 1000)}-${Math.round(p.vmax * 1000)}`
+      : s.endless ? `e${endless.seed}.${s.cliff - 1000}` : 'n' + s.cliff;   // s.cliff = 1000 + run index in Endless
+    return `${GAME_URL}?c=${c}&s=${score}`;
   }
   function challengeText() {
     if (s.daily) {
@@ -1749,6 +1769,7 @@
             stuck = { n: 0, fails: 0 }; saveJSON('cliff_stuck', stuck);
             coins += s.coinsWon; save('cliff_coins', coins);
             if (!s.replay) {
+              Track.send('cliff_pass', s.cliff);      // web build only: where players get through (and where they stop)
               if (s.spec.boss) s.worldDone = true;
               if (s.spec.boss && s.world === 5 && !storyDone()) { s.allDone = true; Track.send('all_worlds', roundsPlayed); }
               cliff++;
@@ -1814,7 +1835,7 @@
     // Pieces of the edge falling into the lava
     if (s.rocks) for (const r of s.rocks) { r.vy += G_PX * dt; r.x += r.vx * dt; r.y += r.vy * dt; r.rot += r.vr * dt; }
     // quake: the screen keeps shaking while you drive
-    if (s.spec.quake && (s.state === 'holding' || s.state === 'sliding') && !s.daily && !s.friend) shake = Math.max(shake, 3 * s.spec.quake);
+    if (s.spec.quake && (s.state === 'holding' || s.state === 'sliding') && !s.daily) shake = Math.max(shake, 3 * s.spec.quake);
     // Particles
     for (const p of particles) {
       p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt;
@@ -2668,7 +2689,7 @@
     }
     if (Z.bg) drawBackdrop(Z);
     if (inArena(s.cliff) && !s.daily && !s.friend) drawBoss();
-    if (s.spec.wind && !s.daily && !s.friend) drawWind(s.spec.wind, s.spec.fog && s.world === 2);
+    if (s.spec.wind && !s.daily) drawWind(s.spec.wind, s.spec.fog && s.world === 2);
     if (Z !== lastZone) { lastZone = Z; setPageSky(Z); }
 
     // world (camera space)
@@ -2771,7 +2792,7 @@
     ctx.globalAlpha = 1;
     ctx.restore();
 
-    if (s.spec.fog && s.world === 2 && !s.daily && !s.friend) drawStormHaze();
+    if (s.spec.fog && s.world === 2 && !s.daily) drawStormHaze();
     // HUD (screen space)
     text(storyDone() ? 'ALL WORLDS ✓' : 'BEST ' + cliffLabel(bestCliff).replace('CLIFF ', ''), 26, 50, 22, '#ffffff', 800, 'left');
 
