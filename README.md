@@ -9,7 +9,7 @@
 
 | النسخة | الحالة | أين هي |
 |---|---|---|
-| **V3 لـ CrazyGames** | أُرسلت في 2026-11-05، **تنتظر المراجعة** | `platform/crazygames-v3/index.html`، والملف المرسل نفسه: `dist/crazygames-v3-submitted-2026-11-05.html` |
+| **V3 لـ CrazyGames** | أُرسلت في 2026-11-05، **رُفضت في 2026-11-06** (الجودة العامة) | `platform/crazygames-v3/index.html`، والملف المرسل نفسه: `dist/crazygames-v3-submitted-2026-11-05.html` |
 | **V3 للموقع** | **منشورة منذ 2026-11-05** على https://waeel1899464.github.io/cliff-edge/ | `docs/index.html` (مطابق لـ `platform/web-v3/index.html`) |
 | V1 للموقع | أرشيف (كانت منشورة حتى 2026-11-05) | `archive/web-v1-backup/docs-index.html` والفرع `backup/web-v1` |
 | V1 لـ CrazyGames | أرشيف (لها معاينة منشورة قديمة) | `archive/platform-crazygames-v1/` والفرع `backup/cg-stable-a7` |
