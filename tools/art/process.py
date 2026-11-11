@@ -14,6 +14,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SRC, OUT = os.path.join(ROOT, 'design/art-src'), os.path.join(ROOT, 'design/art')
 os.makedirs(OUT, exist_ok=True)
 SEA_TOP_OVERRIDE = {}      # world -> fraction, if the automatic sea line is ever wrong
+# world -> (x in the picture, x on the phone screen), both 0..1: keeps something important in view
+# on a narrow phone screen (the picture is wider than the screen). Default: centred.
+FOCUS = {4: (0.23, 0.2)}   # the Moon: the Earth stays on screen, upper left
 
 def key_green(path):
     a = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
@@ -24,6 +27,24 @@ def key_green(path):
     rgba = np.dstack([np.stack([r, np.where(alpha < 1, g2, g), b], -1), alpha * 255]).astype(np.uint8)
     im = Image.fromarray(rgba, 'RGBA')
     return im.crop(im.getchannel('A').point(lambda v: 255 if v > 20 else 0).getbbox())
+
+def heal_seams(im, band=0.08):
+    """Hides a visible seam where the tile meets itself: near each edge the picture is cross-faded
+    with a copy shifted by half a tile (whose edges continue across the wrap). Only on the axis that
+    needs it (top/bottom or left/right rows differ). Returns the picture and which axes were fixed."""
+    a = np.asarray(im).astype(np.float32)
+    h, w = a.shape[:2]
+    fixed = []
+    for axis, n in ((0, h), (1, w)):
+        first, last = np.take(a, [0, 1, 2], axis=axis).mean(axis=axis), np.take(a, [n - 3, n - 2, n - 1], axis=axis).mean(axis=axis)
+        if np.abs(first.mean(axis=0) - last.mean(axis=0)).max() < 12: continue   # only a clearly visible seam
+        rolled = np.roll(a, n // 2, axis=axis)
+        t = np.arange(n) / (n - 1)
+        m = np.clip(np.minimum(t, 1 - t) / band, 0, 1)            # 0 at the edges, 1 inside
+        m = m[:, None, None] if axis == 0 else m[None, :, None]
+        a = a * m + rolled * (1 - m)
+        fixed.append('vertical' if axis == 0 else 'horizontal')
+    return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)), fixed
 
 def src(name):
     m = [p for p in glob.glob(os.path.join(SRC, name + '.*')) if '-alt-' not in p]
@@ -63,10 +84,13 @@ for n in range(1, 6):
         top = SEA_TOP_OVERRIDE.get(n) or (lo + 3 + int(np.argmax(diff)) + 2) / len(rows)
         sea = np.median(b[int(len(rows) * (top + 0.04)):, :, :].reshape(-1, 3), axis=0)
         w.update(bg_w=bg.width, bg_h=bg.height, sea_top=round(top, 4), sea=[int(v) for v in sea])
+        if n in FOCUS: w['focus'] = list(FOCUS[n])
     p = src(f'world{n}-rock')
     if p:
-        Image.open(p).convert('RGB').resize((512, 512), Image.LANCZOS).save(os.path.join(OUT, f'world{n}-rock.webp'), quality=82, method=6)
+        rock, fixed = heal_seams(Image.open(p).convert('RGB').resize((512, 512), Image.LANCZOS))
+        rock.save(os.path.join(OUT, f'world{n}-rock.webp'), quality=82, method=6)
         w['rock'] = True
+        if fixed: w['rock_seams_fixed'] = fixed
     if w: info['worlds'][str(n)] = w
 json.dump(info, open(os.path.join(OUT, 'art.json'), 'w'), indent=1)
 print(json.dumps(info['worlds'], indent=1))

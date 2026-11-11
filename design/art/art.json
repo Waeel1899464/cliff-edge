@@ -32,6 +32,24 @@
     133
    ],
    "rock": true
+  },
+  "4": {
+   "bg_w": 2000,
+   "bg_h": 1116,
+   "sea_top": 0.5305,
+   "sea": [
+    64,
+    73,
+    87
+   ],
+   "focus": [
+    0.23,
+    0.2
+   ],
+   "rock": true,
+   "rock_seams_fixed": [
+    "vertical"
+   ]
   }
  },
  "car_w": 776,

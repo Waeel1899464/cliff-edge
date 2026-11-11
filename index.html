@@ -2760,7 +2760,9 @@
       // painted world: its sea line sits on the game's sea line, centred, covering the screen
       const k = Math.max(WATER_Y / (artW.info.sea_top * bgArt.naturalHeight), H / bgArt.naturalHeight, W / bgArt.naturalWidth);
       const bw = bgArt.naturalWidth * k, bh = bgArt.naturalHeight * k;
-      ctx.drawImage(bgArt, (W - bw) / 2, WATER_Y - artW.info.sea_top * bh, bw, bh);
+      const f = artW.info.focus;                      // keep something (the Earth on the Moon) in view
+      const ox = f ? Math.min(0, Math.max(W - bw, W * f[1] - f[0] * bw)) : (W - bw) / 2;
+      ctx.drawImage(bgArt, ox, WATER_Y - artW.info.sea_top * bh, bw, bh);
       // the snow boss fights at night and the blizzard darkens the day: the same picture, darker
       const shade = Z === SNOW_NIGHT ? 'rgba(6,10,36,0.66)' : Z === SNOW_DUSK ? 'rgba(36,44,96,0.38)' : null;
       if (shade) { ctx.fillStyle = shade; ctx.fillRect(-20, -20, W + 40, H + 40); }
