@@ -5,10 +5,14 @@ Usage: python3 tools/art/embed.py   (after tools/art/process.py)
 import os, json, base64
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 A = os.path.join(ROOT, 'design/art')
-files = {'car': 'car-body.webp', 'wheel': 'wheel.webp', 'bg1': 'world1-hills-bg.webp', 'rock1': 'world1-rock.webp'}
+files = {'car': 'car-body.webp', 'wheel': 'wheel.webp'}
+for n in range(1, 6):
+    for kind, key in (('bg', 'bg'), ('rock', 'rock')):
+        f = f'world{n}-{kind}.webp'
+        if os.path.exists(os.path.join(A, f)): files[key + str(n)] = f
 img = {k: 'data:image/webp;base64,' + base64.b64encode(open(os.path.join(A, f), 'rb').read()).decode() for k, f in files.items()}
 info = json.load(open(os.path.join(A, 'art.json')))
 with open(os.path.join(A, 'art-data.js'), 'w') as f:
     f.write('  // Game images (made with AI by the owner, processed by tools/art). Generated file: do not edit.\n')
     f.write('  const ART_DATA = ' + json.dumps({'img': img, 'info': info}, separators=(',', ':')) + ';\n')
-print('art-data.js', os.path.getsize(os.path.join(A, 'art-data.js')), 'bytes')
+print('art-data.js', os.path.getsize(os.path.join(A, 'art-data.js')), 'bytes;', ', '.join(files))

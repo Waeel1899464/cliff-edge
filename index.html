@@ -552,13 +552,21 @@
     const top = wy - (I.arches[0].top * h + I.arches[0].r * w) + CAR_H / 2 + 2;   // picture top, body coords
     return { w, h, x, top, r, wy, wheels: I.arches.map(a => x + a.cx * w), face: { x: -3, y: -4.5, k: 0.68 } };
   })();
-  // Rock face pattern (world space, ~170 px per tile), made once the picture has loaded.
-  let rockPat = null;
-  function rockPattern() {
-    if (rockPat || !artReady('rock1')) return rockPat;
-    try { rockPat = ctx.createPattern(ART.rock1, 'repeat'); rockPat.setTransform(new DOMMatrix().scale(170 / ART.rock1.naturalWidth)); }
-    catch (e) { rockPat = null; }
-    return rockPat;
+  // Painted worlds: background, sea colour and rock face of the world on screen (story and Endless
+  // looks; the daily and friend cliffs keep the original drawings). null = draw as before.
+  const ART_WORLD = { hills: 1, dunes: 2, peaks: 3, moon: 4, volcano: 5 };
+  function worldArt(Z) {
+    const n = ART_WORLD[Z.bg], info = n && ART_DATA.info && ART_DATA.info.worlds && ART_DATA.info.worlds[n];
+    if (!info) return null;
+    return { n, info, bg: artReady('bg' + n) && info.sea_top ? ART['bg' + n] : null };
+  }
+  // Rock face pattern (world space, ~170 px per tile), made once each picture has loaded.
+  const rockPats = {};
+  function rockPattern(n) {
+    if (rockPats[n] || !artReady('rock' + n)) return rockPats[n] || null;
+    try { const p = ctx.createPattern(ART['rock' + n], 'repeat'); p.setTransform(new DOMMatrix().scale(170 / ART['rock' + n].naturalWidth)); rockPats[n] = p; }
+    catch (e) { return null; }
+    return rockPats[n];
   }
   function carArt() { return CAR_ART && skin === SKINS[0] && artReady('car') ? CAR_ART : null; }
 
@@ -2747,12 +2755,12 @@
         ctx.beginPath(); ctx.arc(122, 142, 22, 0, Math.PI * 2); ctx.fill();
       }
     }
-    const bgArt = Z.bg === 'hills' && artReady('bg1') && ART_DATA.info ? ART.bg1 : null;
+    const artW = worldArt(Z), bgArt = artW && artW.bg;
     if (bgArt) {
       // painted world: its sea line sits on the game's sea line, centred, covering the screen
-      const k = WATER_Y / (ART_DATA.info.bg_sea_top * bgArt.naturalHeight);
+      const k = Math.max(WATER_Y / (artW.info.sea_top * bgArt.naturalHeight), H / bgArt.naturalHeight, W / bgArt.naturalWidth);
       const bw = bgArt.naturalWidth * k, bh = bgArt.naturalHeight * k;
-      ctx.drawImage(bgArt, (W - bw) / 2, 0, bw, Math.max(bh, H));
+      ctx.drawImage(bgArt, (W - bw) / 2, WATER_Y - artW.info.sea_top * bh, bw, bh);
     } else if (Z.bg) drawBackdrop(Z);
     if (inArena(s.cliff) && !s.daily && !s.friend) drawBoss();
     if (s.spec.wind && !s.daily) drawWind(s.spec.wind, s.spec.fog && s.world === 2);
@@ -2765,7 +2773,7 @@
     ctx.translate(-cam.fx, -cam.fy);
 
     const ePx = edgePx();
-    const rock = bgArt && rockPattern();
+    const rock = artW && rockPattern(artW.n);
     ctx.fillStyle = rock || s.surface.side;
     ctx.fillRect(-2000, GROUND_Y + 14, ePx + 2000, 3000);
     if (rock) {
@@ -2860,7 +2868,7 @@
     }
 
     // sea drawn over the pieces so sinking parts look underwater
-    ctx.fillStyle = bgArt ? 'rgba(70,184,216,0.9)' : Z.sea;     // the painted world's turquoise sea
+    ctx.fillStyle = bgArt && artW.info.sea ? `rgba(${artW.info.sea.join(',')},0.9)` : Z.sea;     // the painted world's own sea colour
     ctx.fillRect(-2000, WATER_Y, 6000, 3000);
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
     ctx.fillRect(-2000, WATER_Y, 6000, 3);
@@ -3078,7 +3086,7 @@
   }
   requestAnimationFrame(frame);
   window.__cliff = () => s;   // used only for automated testing
-  window.__art = () => ({ car: artReady('car'), wheel: artReady('wheel'), bg1: artReady('bg1'), carArt: !!carArt() });   // testing only
+  window.__art = () => ({ car: artReady('car'), wheel: artReady('wheel'), bg1: artReady('bg1'), bg2: artReady('bg2'), rock1: artReady('rock1'), rock2: artReady('rock2'), carArt: !!carArt(), world: (worldArt(zoneOf(s)) || {}).n || 0 });   // testing only
   window.__physics = Physics;   // used only for automated testing and tools/sim
   window.__shareVisible = () => shareVisible();
 })();
