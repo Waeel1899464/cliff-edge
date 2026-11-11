@@ -47,6 +47,7 @@ for x0, x1 in arches:
 
 car.resize((480, round(480 * H / Wd)), Image.LANCZOS).save(os.path.join(OUT, 'car-body.webp'), quality=88, method=6)
 wheel.resize((128, 128), Image.LANCZOS).save(os.path.join(OUT, 'wheel.webp'), quality=88, method=6)
+Image.open(os.path.join(SRC, 'world1-rock.jpg')).convert('RGB').resize((512, 512), Image.LANCZOS).save(os.path.join(OUT, 'world1-rock.webp'), quality=82, method=6)
 bg = Image.open(os.path.join(SRC, 'world1-hills-bg.jpg')).convert('RGB')
 bg.save(os.path.join(OUT, 'world1-hills-bg.webp'), quality=84, method=6)
 # where the sea starts in the background (first row that is mostly sea-coloured, from the top)

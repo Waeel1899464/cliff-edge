@@ -5,7 +5,7 @@ Usage: python3 tools/art/embed.py   (after tools/art/process.py)
 import os, json, base64
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 A = os.path.join(ROOT, 'design/art')
-files = {'car': 'car-body.webp', 'wheel': 'wheel.webp', 'bg1': 'world1-hills-bg.webp'}
+files = {'car': 'car-body.webp', 'wheel': 'wheel.webp', 'bg1': 'world1-hills-bg.webp', 'rock1': 'world1-rock.webp'}
 img = {k: 'data:image/webp;base64,' + base64.b64encode(open(os.path.join(A, f), 'rb').read()).decode() for k, f in files.items()}
 info = json.load(open(os.path.join(A, 'art.json')))
 with open(os.path.join(A, 'art-data.js'), 'w') as f:

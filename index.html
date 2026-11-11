@@ -552,6 +552,14 @@
     const top = wy - (I.arches[0].top * h + I.arches[0].r * w) + CAR_H / 2 + 2;   // picture top, body coords
     return { w, h, x, top, r, wy, wheels: I.arches.map(a => x + a.cx * w), face: { x: -3, y: -4.5, k: 0.68 } };
   })();
+  // Rock face pattern (world space, ~170 px per tile), made once the picture has loaded.
+  let rockPat = null;
+  function rockPattern() {
+    if (rockPat || !artReady('rock1')) return rockPat;
+    try { rockPat = ctx.createPattern(ART.rock1, 'repeat'); rockPat.setTransform(new DOMMatrix().scale(170 / ART.rock1.naturalWidth)); }
+    catch (e) { rockPat = null; }
+    return rockPat;
+  }
   function carArt() { return CAR_ART && skin === SKINS[0] && artReady('car') ? CAR_ART : null; }
 
   // Endless cliffs. Progress is never wiped:
@@ -2757,8 +2765,19 @@
     ctx.translate(-cam.fx, -cam.fy);
 
     const ePx = edgePx();
-    ctx.fillStyle = s.surface.side;
+    const rock = bgArt && rockPattern();
+    ctx.fillStyle = rock || s.surface.side;
     ctx.fillRect(-2000, GROUND_Y + 14, ePx + 2000, 3000);
+    if (rock) {
+      // painted rock face: a soft shadow under the road (keeps the ruler readable) and a darker edge
+      const sh = ctx.createLinearGradient(0, GROUND_Y + 14, 0, GROUND_Y + 64);
+      sh.addColorStop(0, 'rgba(28,18,12,0.72)'); sh.addColorStop(1, 'rgba(28,18,12,0)');
+      ctx.fillStyle = sh; ctx.fillRect(-2000, GROUND_Y + 14, ePx + 2000, 50);
+      const ed = ctx.createLinearGradient(ePx - 22, 0, ePx, 0);
+      ed.addColorStop(0, 'rgba(28,18,12,0)'); ed.addColorStop(1, 'rgba(28,18,12,0.45)');
+      ctx.fillStyle = ed; ctx.fillRect(ePx - 22, GROUND_Y + 14, 22, 3000);
+      ctx.fillStyle = rock;
+    }
     // A downhill road is drawn at its real angle, pivoting at the edge (physics uses the same slope).
     const ang = Math.atan(s.spec.slope || 0);
     if (ang) {
@@ -2794,8 +2813,12 @@
     // Ground type, written on the cliff face instead of the top of the screen.
     ctx.font = '800 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    if (s.state === 'ready' || s.state === 'holding') ctx.fillText(s.surface.name, EDGE_X - 16, GROUND_Y + (ASSIST ? 62 : 40));
+    ctx.fillStyle = rock ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.55)';
+    if (rock) { ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(28,18,12,0.7)'; ctx.lineJoin = 'round'; }
+    if (s.state === 'ready' || s.state === 'holding') {
+      if (rock) ctx.strokeText(s.surface.name, EDGE_X - 16, GROUND_Y + (ASSIST ? 62 : 40));
+      ctx.fillText(s.surface.name, EDGE_X - 16, GROUND_Y + (ASSIST ? 62 : 40));
+    }
 
     // name each ground change on the cliff face, under where it starts
     for (const g of Physics.segments(s.spec).slice(1)) {
