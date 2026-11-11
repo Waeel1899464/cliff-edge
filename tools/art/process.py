@@ -18,13 +18,29 @@ SEA_TOP_OVERRIDE = {}      # world -> fraction, if the automatic sea line is eve
 # on a narrow phone screen (the picture is wider than the screen). Default: centred.
 FOCUS = {4: (0.23, 0.2)}   # the Moon: the Earth stays on screen, upper left
 
-def key_green(path):
-    a = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+def key_green(path, keep_green=False):
+    """Removes the green screen. Only green that is connected to the picture's border is removed
+    (flood fill), so green parts of the character itself (the Giant Hill's grass) stay solid.
+    Soft edge from the colour distance to the screen colour; green spill cleaned on the edge only."""
+    from PIL import ImageDraw
+    rgb = Image.open(path).convert('RGB')
+    a = np.asarray(rgb).astype(np.float32)
+    border = np.concatenate([a[0], a[-1], a[:, 0], a[:, -1]])
+    key = np.median(border, axis=0)                                # the screen colour
+    d = np.sqrt(((a - key) ** 2).sum(-1))
+    T1, T2 = 60.0, 115.0
+    cand = Image.fromarray(np.where(d < T2, 255, 0).astype(np.uint8), 'L').copy()   # own buffer, so the flood fill sticks
+    h, w = d.shape
+    for x, y in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)]:
+        if cand.getpixel((x, y)) == 255: ImageDraw.floodfill(cand, (x, y), 128)
+    bg = np.asarray(cand) == 128                                   # screen pixels connected to the border
+    alpha = np.where(bg, np.clip((d - T1) / (T2 - T1), 0, 1), 1.0)
     r, g, b = a[..., 0], a[..., 1], a[..., 2]
-    greenness = g - np.maximum(r, b)
-    alpha = np.clip(1 - (greenness - 40) / 90, 0, 1)
-    g2 = np.minimum(g, np.maximum(r, b) + 10)
-    rgba = np.dstack([np.stack([r, np.where(alpha < 1, g2, g), b], -1), alpha * 255]).astype(np.uint8)
+    # green spill: on the edge always; everywhere for characters with no green of their own
+    # (see-through wind and snow swirls keep a green tint otherwise)
+    spill = (alpha < 1) | ((not keep_green) & (g > np.maximum(r, b) + 12))
+    g2 = np.where(spill, np.minimum(g, np.maximum(r, b) + 10), g)
+    rgba = np.dstack([r, g2, b, alpha * 255]).astype(np.uint8)
     im = Image.fromarray(rgba, 'RGBA')
     return im.crop(im.getchannel('A').point(lambda v: 255 if v > 20 else 0).getbbox())
 
@@ -70,6 +86,17 @@ for x0, x1 in arches:
     info['arches'].append({'cx': round((x0 + x1) / 2 / Wd, 4), 'r': round((x1 - x0) / 2 / Wd, 4), 'top': round(top / H, 4)})
 car.resize((480, round(480 * H / Wd)), Image.LANCZOS).save(os.path.join(OUT, 'car-body.webp'), quality=88, method=6)
 wheel.resize((128, 128), Image.LANCZOS).save(os.path.join(OUT, 'wheel.webp'), quality=88, method=6)
+
+BOSS_NAMES = {1: 'boss1-hill', 2: 'boss2-sandstorm', 3: 'boss3-blizzard', 4: 'boss4-crater', 5: 'boss5-volcano'}
+info['bosses'] = {}
+for n, name in BOSS_NAMES.items():
+    p = src(name)
+    if not p: continue
+    im = key_green(p, keep_green=(n == 1))       # the Giant Hill is green itself
+    k = min(1, 640 / max(im.size))
+    im = im.resize((round(im.width * k), round(im.height * k)), Image.LANCZOS)
+    im.save(os.path.join(OUT, f'boss{n}.webp'), quality=86, method=6)
+    info['bosses'][str(n)] = {'w': im.width, 'h': im.height}
 
 for n in range(1, 6):
     w = {}

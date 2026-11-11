@@ -2563,7 +2563,33 @@
     const shakeX = hit ? Math.sin(now / 25) * 8 * (1 - (now - s.endAt) / 700) : 0;
     const mood = down > 0 ? 'down' : hit ? 'hit' : ['sleep', 'peek', 'awake', 'angry', 'furious'][ph - 1];
     const base = WATER_Y;
-    if (B.kind === 'hill' || B.kind === 'crater') {
+    const img = artReady('boss' + s.world) ? ART['boss' + s.world] : null;   // V4 painted body (the face stays drawn)
+    const body = (w, cx, bottom) => { const h = w * img.naturalHeight / img.naturalWidth; ctx.drawImage(img, cx - w / 2, bottom - h, w, h); return h; };
+    if (img && (B.kind === 'hill' || B.kind === 'crater')) {
+      // behind the sea, right of the edge: the face stays above the road, clear of the STOP sign
+      const cx = 490 + shakeX, h = body(540, cx, base + 6 + down * 330);
+      drawBossFace(cx, base + 6 + down * 330 - h + h * (B.kind === 'hill' ? 0.3 : 0.3), mood, B.kind === 'hill' ? '#173a1e' : '#14152a', B.kind === 'crater');
+    } else if (img && B.kind === 'cloud') {
+      const left = (s.spec.wind || 0) >= 0;
+      const cx = (left ? 120 : 425) + shakeX, cy = 380 - down * 120;
+      ctx.save(); ctx.globalAlpha = 1 - down;
+      body(300, cx, cy + 105);
+      drawBossFace(cx, cy - 4, mood, B.ink, false);
+      if (mood !== 'sleep' && mood !== 'down') {
+        const dir = left ? 1 : -1;
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+        for (let i = 0; i < 3; i++) { const y = cy + 30 + i * 12, x0 = cx + dir * (90 + ((now / 6 + i * 30) % 60)); ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0 + dir * 26, y); ctx.stroke(); }
+      }
+      if (B.snow) { ctx.fillStyle = '#ffffff'; for (let i = 0; i < 14; i++) { const x = cx - 80 + ((i * 37) % 160), y = cy + 90 + ((now / 8 + i * 47) % 200); ctx.fillRect(x, y, 3, 3); } }
+      ctx.restore();
+    } else if (img && B.kind === 'volcano') {
+      const cx = 490 + shakeX, bottom = base + 6 + down * 360, h = body(520, cx, bottom), top = bottom - h;
+      if (!down) {   // smoke grows with every phase
+        ctx.fillStyle = 'rgba(70,40,40,0.55)';
+        for (let i = 0; i < 2 + ph; i++) { ctx.beginPath(); ctx.arc(cx + Math.sin(i * 1.7 + now / 900) * 14, top - 20 - i * 30, 14 + i * 6, 0, Math.PI * 2); ctx.fill(); }
+      }
+      drawBossFace(cx, top + h * 0.36, mood, '#ffb347', false);
+    } else if (B.kind === 'hill' || B.kind === 'crater') {
       const cx = 455 + shakeX, top = 380 + down * 330;
       ctx.fillStyle = B.kind === 'hill' ? '#3e8c4a' : '#4a4d66';
       ctx.beginPath(); ctx.moveTo(cx - 230, base);

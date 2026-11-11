@@ -10,6 +10,8 @@ for n in range(1, 6):
     for kind, key in (('bg', 'bg'), ('rock', 'rock')):
         f = f'world{n}-{kind}.webp'
         if os.path.exists(os.path.join(A, f)): files[key + str(n)] = f
+for n in range(1, 6):
+    if os.path.exists(os.path.join(A, f'boss{n}.webp')): files[f'boss{n}'] = f'boss{n}.webp'
 img = {k: 'data:image/webp;base64,' + base64.b64encode(open(os.path.join(A, f), 'rb').read()).decode() for k, f in files.items()}
 info = json.load(open(os.path.join(A, 'art.json')))
 font_path = os.path.join(ROOT, 'design/fonts/lilita-one-latin-400-normal.woff2')   # Lilita One, SIL Open Font License
