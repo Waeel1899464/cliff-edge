@@ -2761,6 +2761,10 @@
       const k = Math.max(WATER_Y / (artW.info.sea_top * bgArt.naturalHeight), H / bgArt.naturalHeight, W / bgArt.naturalWidth);
       const bw = bgArt.naturalWidth * k, bh = bgArt.naturalHeight * k;
       ctx.drawImage(bgArt, (W - bw) / 2, WATER_Y - artW.info.sea_top * bh, bw, bh);
+      // the snow boss fights at night and the blizzard darkens the day: the same picture, darker
+      const shade = Z === SNOW_NIGHT ? 'rgba(6,10,36,0.66)' : Z === SNOW_DUSK ? 'rgba(36,44,96,0.38)' : null;
+      if (shade) { ctx.fillStyle = shade; ctx.fillRect(-20, -20, W + 40, H + 40); }
+      if (Z.stars && Z.bg !== 'moon') { ctx.fillStyle = 'rgba(255,255,255,0.8)'; for (const st of STARS) if (st[1] < WATER_Y * 0.55) ctx.fillRect(st[0], st[1], st[2], st[2]); }
     } else if (Z.bg) drawBackdrop(Z);
     if (inArena(s.cliff) && !s.daily && !s.friend) drawBoss();
     if (s.spec.wind && !s.daily) drawWind(s.spec.wind, s.spec.fog && s.world === 2);
@@ -2868,7 +2872,7 @@
     }
 
     // sea drawn over the pieces so sinking parts look underwater
-    ctx.fillStyle = bgArt && artW.info.sea ? `rgba(${artW.info.sea.join(',')},0.9)` : Z.sea;     // the painted world's own sea colour
+    ctx.fillStyle = bgArt && artW.info.sea && Z !== SNOW_NIGHT && Z !== SNOW_DUSK ? `rgba(${artW.info.sea.join(',')},0.9)` : Z.sea;     // the painted world's own sea colour
     ctx.fillRect(-2000, WATER_Y, 6000, 3000);
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
     ctx.fillRect(-2000, WATER_Y, 6000, 3);
@@ -3086,7 +3090,7 @@
   }
   requestAnimationFrame(frame);
   window.__cliff = () => s;   // used only for automated testing
-  window.__art = () => ({ car: artReady('car'), wheel: artReady('wheel'), bg1: artReady('bg1'), bg2: artReady('bg2'), rock1: artReady('rock1'), rock2: artReady('rock2'), carArt: !!carArt(), world: (worldArt(zoneOf(s)) || {}).n || 0 });   // testing only
+  window.__art = () => ({ car: artReady('car'), wheel: artReady('wheel'), bg1: artReady('bg1'), bg2: artReady('bg2'), rock1: artReady('rock1'), rock2: artReady('rock2'), all: Object.keys(ART).length > 0 && Object.keys(ART).every(artReady), count: Object.keys(ART).length, carArt: !!carArt(), world: (worldArt(zoneOf(s)) || {}).n || 0 });   // testing only
   window.__physics = Physics;   // used only for automated testing and tools/sim
   window.__shareVisible = () => shareVisible();
 })();
