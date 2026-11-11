@@ -21,6 +21,8 @@ const HELP = v3src.slice(v3src.indexOf('const HELP = `') + 14, v3src.indexOf('`;
     check('the default car uses the picture', a.carArt);
     const r = await page.evaluate(() => { const x = window.__play(3); window.__next(); const y = window.__play(-999); return { cleared: x.cleared, fell: y.state }; });
     check('a stop and a fall play normally with the pictures', r.cleared && r.fell === 'fell', JSON.stringify(r));
+    const perfect = await page.evaluate(() => { window.__next(); const x = window.__play(1); return { stars: x.stars, flash: !!x.flashAt }; });
+    check('a perfect stop (3 stars) flashes the screen', perfect.stars === 3 && perfect.flash, JSON.stringify(perfect));
     check('no network requests (pictures are inside the file)', external.length === 0, external.join(' '));
     check('no page errors', errors.length === 0, errors.join(' | '));
     const size = fs.statSync(path.join(__dirname, '..', PAGE.slice(1))).size;

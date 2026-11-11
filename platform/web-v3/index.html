@@ -964,6 +964,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     lastRoundCliff = s.cliff;
   }
   let lastRoundCliff = null;
+  let titleGone = false;      // V4: the game title shows until the first press of the session
   const worldIntroShown = {};   // the new-world card shows once per session per world
   const WORLD_NEW = { 2: 'NEW: WIND & SAND', 3: 'NEW: ICE PATCHES & FOG', 4: 'NEW: LOW GRAVITY', 5: 'NEW: CRUMBLING EDGE & QUAKES' };
   newRound();
@@ -1020,6 +1021,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       activePointer = id;
       if (typeof id === 'number') { try { canvas.setPointerCapture(id); } catch (err) {} }
       s.state = 'holding';
+      titleGone = true;
       s.tPress = t === undefined ? now : t;
       s.crossAt = s.tPress + realOf(Physics.holdTimeForS(Physics.edgeAt(s.spec, Infinity), s.spec)) * 1000;   // still holding then = over the edge
       roundsPlayed++; save('cliff_rounds', roundsPlayed);
@@ -1809,6 +1811,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
         }
       }
       if (s.state === 'sliding' && s.v > 0.4 && Math.random() < 0.9) spawnDust(Math.random() < s.v / 6 ? 2 : 1);
+      else if (s.state === 'holding' && s.v > 1 && Math.random() < 0.35 + s.v / 20) spawnDust(1);   // V4: a little dust while driving
       if (over) {
         startFall();
       } else if (s.state === 'sliding' && now >= s.stopAt) {
@@ -1837,6 +1840,10 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
             s.cleared = true;
             s.grade = Physics.grade(s.result, s.target);
             s.stars = STAR_OF[s.grade];
+            if (s.stars === 3) {                       // V4: a perfect stop feels like one
+              s.flashAt = performance.now(); cam.z *= 1.15; shake = Math.max(shake, 4);
+              puff(frontX() * PPM, GROUND_Y - 30, 26, '#ffffff', 220, 420, 4, 1.0);
+            }
             if (s.stars > (stars[s.cliff] || 0)) { stars[s.cliff] = s.stars; s.newStars = true; saveJSON('cliff_stars', stars); }
             s.coinsWon = coinReward(s.result, s.target, s.grade);
             stuck = { n: 0, fails: 0 }; saveJSON('cliff_stuck', stuck);
@@ -1920,7 +1927,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     // Long roads: zoom out just enough that the whole car stays on screen (V2 roads keep zoom 1).
     const rearPx = s.x * PPM;
     const zFar = rearPx < 12 ? Math.max(0.36, (CAM_ANCHOR_X - 12) / (CAM_ANCHOR_X - rearPx)) : 1;
-    let zt = zFar, ft = CAM_ANCHOR_X, fyt = GROUND_Y;
+    // V4: frame the car and the edge together; the car grows on screen as it gets closer, and the
+    // edge, the STOP sign and the target zone always stay in view. (Very long roads: as before.)
+    const fitL = rearPx - 1.2 * PPM, fitR = edgePx() + 1.4 * PPM;
+    const zFit = Math.min(1.7, (W - 24) / Math.max(1, fitR - fitL));
+    const zBase = zFit > zFar ? zFit : zFar, fBase = zFit > zFar ? fitR - (W - 12 - CAM_ANCHOR_X) / zFit : CAM_ANCHOR_X;
+    let zt = zBase, ft = fBase, fyt = GROUND_Y;
     if (s.rescue && s.rescue.state === 'anim' && s.rescue.kind !== 'rewind') {
       zt = 1; ft = CAM_ANCHOR_X; fyt = GROUND_Y;          // the whole scene: cliff, sea and the rescue
     } else if (s.parts) {
@@ -1932,9 +1944,9 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     } else if (s.state === 'sliding' || s.state === 'stopped') {
       const d = gapNow();
       const near = Math.max(0, Math.min(1, 1 - d / 3));
-      zt = zFar + (3 - zFar) * near * near;
+      zt = zBase + (3 - zBase) * near * near;
       const focus = (frontX() * PPM + EDGE_X) / 2;
-      ft = CAM_ANCHOR_X + (focus - CAM_ANCHOR_X) * near;
+      ft = fBase + (focus - fBase) * near;
     }
     const ease = 1 - Math.exp(-rawDt * (s.parts ? 6 : 5));
     cam.z += (zt - cam.z) * ease;
@@ -2181,6 +2193,30 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       ctx.fill();
       ctx.restore();
     }
+  }
+
+  // V4 title: the game name bounces in once per session, until the first press.
+  function drawTitle() {
+    const t = performance.now() / 1000;
+    const k = Math.min(1, t / 0.6), pop = 1 + 0.25 * Math.sin(k * Math.PI) * (1 - k);
+    ctx.save(); ctx.translate(W / 2, 400 + Math.sin(t * 2) * 4); ctx.rotate(-0.04); ctx.scale(pop, pop);
+    text('CLIFF EDGE', 4, 6, 76, 'rgba(10,10,25,0.35)', 900);
+    text('CLIFF EDGE', 0, 0, 76, '#ffd23f', 900);
+    ctx.restore();
+  }
+  // A pulsing press point at the bottom: where (and how) to play, without words to read.
+  function drawHoldHint() {
+    const t = (performance.now() % 1400) / 1400, x = W / 2, y = 850;
+    ctx.save();
+    for (const d of [0, 0.5]) {
+      const u = (t + d) % 1;
+      ctx.strokeStyle = `rgba(255,255,255,${0.6 * (1 - u)})`; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(x, y, 18 + u * 34, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.beginPath(); ctx.arc(x, y, 16 + 3 * Math.sin(t * Math.PI * 2), 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    text(FINE_POINTER ? 'HOLD SPACE' : 'HOLD', x, y + 64, 24, '#ffffff', 900);
   }
 
   // Bottom line on end screens.
@@ -3043,10 +3079,13 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 
     if (s.state === 'ready') {
       // Teach the controls only in the first rounds; after that the screen stays clean.
+      const title = !titleGone && !s.friend && !s.daily;
+      if (title) drawTitle();
       if (roundsPlayed < 3) {
-        text(FINE_POINTER ? 'HOLD SPACE OR CLICK' : 'HOLD TO DRIVE', W / 2, 380, 40, '#ffffff');
-        text('Let go to stop at the edge', W / 2, 426, 22, '#fff3c4', 600);
+        text(FINE_POINTER ? 'HOLD SPACE OR CLICK' : 'HOLD TO DRIVE', W / 2, title ? 468 : 380, 40, '#ffffff');
+        text('Let go to stop at the edge', W / 2, title ? 508 : 426, 22, '#fff3c4', 600);
       }
+      if (title || roundsPlayed < 3) drawHoldHint();
     } else if (s.state === 'sliding' || (ASSIST && s.state === 'holding')) {
       text(fmt(Math.max(0, gapNow() * 100)), W / 2, 340, 52, 'rgba(255,255,255,0.9)');
     } else if (s.state === 'stopped' && !rescuing) {
@@ -3106,6 +3145,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (inSlowMo()) text('SLOW MOTION', W / 2, 290, 22, '#7ef9ff', 900);
     if (shareVisible()) drawShareBtn();
     if (challengeVisible()) drawChallengeBtn();
+    // V4: white flash on a perfect stop
+    if (s.flashAt) { const f = 1 - (performance.now() - s.flashAt) / 260; if (f > 0) { ctx.fillStyle = `rgba(255,255,255,${0.55 * f})`; ctx.fillRect(-20, -20, W + 40, H + 40); } }
     if (performance.now() < toast.until) {
       ctx.fillStyle = 'rgba(10,10,25,0.8)';
       const lines = toast.msg.split('\n');
