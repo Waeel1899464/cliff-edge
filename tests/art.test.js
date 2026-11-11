@@ -27,7 +27,7 @@ const HELP = v3src.slice(v3src.indexOf('const HELP = `') + 14, v3src.indexOf('`;
     check('game file stays light (under 1.2 MB, loads in about a second on 4G)', size < 1200 * 1024, Math.round(size / 1024) + ' KB');
     await ctx.close();
     // each painted world uses its own pictures, and a fall there plays normally
-    for (const [cur, cp, n, name] of [[12, 11, 2, 'Desert'], [22, 21, 3, 'Snow Mountain'], [30, 26, 3, 'Snow boss at night'], [32, 31, 4, 'Moon']]) {
+    for (const [cur, cp, n, name] of [[12, 11, 2, 'Desert'], [22, 21, 3, 'Snow Mountain'], [30, 26, 3, 'Snow boss at night'], [32, 31, 4, 'Moon'], [42, 41, 5, 'Volcano'], [48, 46, 5, 'Volcano boss']]) {
       const seed = `localStorage.setItem('cg3_cliff_cur','${cur}');localStorage.setItem('cg3_cliff_cp','${cp}');localStorage.setItem('cg3_cliff_bestcliff','${cur}');localStorage.setItem('cg3_cliff_rounds','9');`;
       const { page, ctx, errors } = await open(b, srv.url + PAGE, { manualClock: true, init: IN_PAGE + HELP + seed });
       await page.waitForFunction(() => window.__art().all, null, { timeout: 8000 }).catch(() => {});

@@ -50,6 +50,17 @@
    "rock_seams_fixed": [
     "vertical"
    ]
+  },
+  "5": {
+   "bg_w": 2000,
+   "bg_h": 1116,
+   "sea_top": 0.8208,
+   "sea": [
+    236,
+    53,
+    11
+   ],
+   "rock": true
   }
  },
  "car_w": 776,

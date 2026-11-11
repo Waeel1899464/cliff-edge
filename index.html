@@ -2868,7 +2868,7 @@
     if (s.parts) { if (s.rescue && s.rescue.state === 'anim') drawRescue(); else drawParts(); }
     if (s.rocks) for (const r of s.rocks) {
       ctx.save(); ctx.translate(r.x, r.y); ctx.rotate(r.rot);
-      ctx.fillStyle = s.surface.side; ctx.fillRect(-r.w / 2, -r.h / 2, r.w, r.h);
+      ctx.fillStyle = rock || s.surface.side; ctx.fillRect(-r.w / 2, -r.h / 2, r.w, r.h);   // falling pieces are the same rock
       ctx.fillStyle = s.surface.top; ctx.fillRect(-r.w / 2, -r.h / 2, r.w, 8);
       ctx.restore();
     }
