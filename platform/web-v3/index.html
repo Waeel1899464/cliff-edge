@@ -651,16 +651,28 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
   let scale = 1, dpr = 1;
 
+  // V4 wide screens (computers, tablets held sideways): the world fills the whole width, the game's
+  // text and buttons stay in the 540-wide middle column. PAD = logical width added on each side.
+  // Phones held upright are unchanged (PAD 0). Very wide windows keep side bands beyond 2.2:1.
+  let PAD = 0;
   function resize() {
     const vw = document.body.clientWidth, vh = document.body.clientHeight;
     scale = Math.min(vw / W, vh / H);
-    // Cap the drawing size at 1080x1920 (TikTok's standard): sharp, but light for phones and clip recording.
-    dpr = Math.min(window.devicePixelRatio || 1, 1080 / (W * scale));
-    canvas.style.width = (W * scale) + 'px';
+    PAD = 0;
+    if (vw / vh > W / H * 1.15) {                  // clearly wider than the game: use the width
+      scale = vh / H;
+      PAD = Math.max(0, Math.min((H * 2.2 - W) / 2, (vw / scale - W) / 2));
+    }
+    // Cap the drawing size at 1920 px tall (1080x1920 is TikTok's standard): sharp, but light.
+    dpr = Math.min(window.devicePixelRatio || 1, 1920 / (H * scale));
+    canvas.style.width = ((W + 2 * PAD) * scale) + 'px';
     canvas.style.height = (H * scale) + 'px';
-    canvas.width = Math.round(W * scale * dpr);
+    canvas.width = Math.round((W + 2 * PAD) * scale * dpr);
     canvas.height = Math.round(H * scale * dpr);
   }
+  // Drawing starts in the middle column (logical x 0..W); the side areas are x < 0 and x > W.
+  function baseTransform() { ctx.setTransform(scale * dpr, 0, 0, scale * dpr, PAD * scale * dpr, 0); }
+  function fullRect() { ctx.fillRect(-PAD - 20, -20, W + 2 * PAD + 40, H + 40); }
   window.addEventListener('resize', resize);
   resize();
 
@@ -993,7 +1005,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     try { window.focus(); } catch (err) {}
     Sound.init();
     const rect = canvas.getBoundingClientRect();
-    const lx = (e.clientX - rect.left) / scale, ly = (e.clientY - rect.top) / scale;
+    const lx = (e.clientX - rect.left) / scale - PAD, ly = (e.clientY - rect.top) / scale;
     if (Math.hypot(lx - MUTE_X, ly - MUTE_Y) < 34) { Sound.toggleMute(); return; }
     if (challengeVisible() && inBtn(CHALLENGE_BTN, lx, ly)) { pendingChallenge = true; return; }
     if (shareVisible() && inShareBtn(lx, ly)) { pendingShare = true; return; }
@@ -1370,7 +1382,9 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     let copyUsers = 0;
     function copyFrame() {
       if (copyUsers <= 0 || !recCtx) return;
-      try { recCtx.drawImage(canvas, 0, 0, recCanvas.width, recCanvas.height); } catch (e) {}
+      // the clip is always the 9:16 middle column, also on a wide screen
+      const k = scale * dpr;
+      try { recCtx.drawImage(canvas, PAD * k, 0, W * k, H * k, 0, 0, recCanvas.width, recCanvas.height); } catch (e) {}
     }
     // Platform build: clips are off (sharing and downloads are usually blocked inside platform iframes),
     // so nothing here ever runs there.
@@ -2454,7 +2468,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.lineWidth = 3; ctx.lineCap = 'round';
     for (let i = 0; i < n; i++) {
       const y = 70 + ((i * 131.7) % 700), sp = speed * (0.75 + 0.5 * ((i * 0.37) % 1));
-      let x = ((i * 97.3 + now * sp) % (W + 160)) - 80;
+      let x = ((i * 97.3 + now * sp) % (W + 2 * PAD + 160)) - 80 - PAD;   // across the whole width
       if (dir < 0) x = W - x;
       ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - dir * len, y); ctx.stroke();
     }
@@ -2473,7 +2487,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.fillStyle = `rgba(${c},0.96)`; ctx.fillRect(x, -2000, 4000, 5000);
   }
   // Blowing sand over the world on the sandstorm cliff (light, the edge stays readable)
-  function drawStormHaze() { ctx.fillStyle = `rgba(236,190,120,${Math.min(0.24, 0.65 * s.spec.fog)})`; ctx.fillRect(0, 0, W, H); }   // more sand, more haze
+  function drawStormHaze() { ctx.fillStyle = `rgba(236,190,120,${Math.min(0.24, 0.65 * s.spec.fog)})`; fullRect(); }   // more sand, more haze
 
   // Crumbling edge, readable before you drive: each piece that will break has a glowing crack at
   // its inner side, and a red line on the road shows where your car makes it break.
@@ -2790,7 +2804,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function drawMap() {
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, '#141629'); g.addColorStop(1, '#22163a');
-    ctx.fillStyle = g; ctx.fillRect(-20, -20, W + 40, H + 40);
+    ctx.fillStyle = g; fullRect();
     let total = 0; for (const k in stars) total += stars[k];
     text('WORLD MAP', 26, 54, 30, '#ffffff', 900, 'left');
     starPath(40, 98, 11); ctx.fillStyle = '#ffd23f'; ctx.fill();
@@ -2899,7 +2913,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function drawGarage() {
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, '#141629'); g.addColorStop(1, '#22163a');
-    ctx.fillStyle = g; ctx.fillRect(-20, -20, W + 40, H + 40);
+    ctx.fillStyle = g; fullRect();
     const b = GARAGE_BACK;
     ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
     text('◀ MAP', b.x, b.y + 1, 18, '#ffffff', 900);
@@ -2931,13 +2945,13 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function draw() {
     if (screen === 'garage') {
       if (ctx.reset) ctx.reset();
-      ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+      baseTransform();
       drawGarage();
       return;
     }
     if (screen === 'map') {
       if (ctx.reset) ctx.reset();
-      ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+      baseTransform();
       drawMap();
       return;
     }
@@ -2945,7 +2959,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     // frame (clip, transparency, transform) can hide the drawing.
     if (ctx.reset) ctx.reset();
     else { ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowBlur = 0; }
-    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    baseTransform();
     if (shake > 0.3) ctx.translate(rand(-shake, shake), rand(-shake, shake));
 
     // sky (screen space), changes every 5 cliffs
@@ -2955,7 +2969,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     g.addColorStop(0.6, Z.sky[1]);
     g.addColorStop(1, Z.sky[2]);
     ctx.fillStyle = g;
-    ctx.fillRect(-20, -20, W + 40, H + 40);
+    fullRect();
     if (Z.stars) {
       ctx.fillStyle = 'rgba(255,255,255,0.8)';
       for (const st of STARS) ctx.fillRect(st[0], st[1], st[2], st[2]);
@@ -2969,14 +2983,14 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     const artW = worldArt(Z), bgArt = artW && artW.bg;
     if (bgArt) {
       // painted world: its sea line sits on the game's sea line, centred, covering the screen
-      const k = Math.max(WATER_Y / (artW.info.sea_top * bgArt.naturalHeight), H / bgArt.naturalHeight, W / bgArt.naturalWidth);
+      const k = Math.max(WATER_Y / (artW.info.sea_top * bgArt.naturalHeight), H / bgArt.naturalHeight, (W + 2 * PAD) / bgArt.naturalWidth);
       const bw = bgArt.naturalWidth * k, bh = bgArt.naturalHeight * k;
       const f = artW.info.focus;                      // keep something (the Earth on the Moon) in view
-      const ox = f ? Math.min(0, Math.max(W - bw, W * f[1] - f[0] * bw)) : (W - bw) / 2;
+      const ox = f && !PAD ? Math.min(0, Math.max(W - bw, W * f[1] - f[0] * bw)) : Math.min(-PAD, Math.max(W + PAD - bw, (W - bw) / 2));
       ctx.drawImage(bgArt, ox, WATER_Y - artW.info.sea_top * bh, bw, bh);
       // the snow boss fights at night and the blizzard darkens the day: the same picture, darker
       const shade = Z === SNOW_NIGHT ? 'rgba(6,10,36,0.66)' : Z === SNOW_DUSK ? 'rgba(36,44,96,0.38)' : null;
-      if (shade) { ctx.fillStyle = shade; ctx.fillRect(-20, -20, W + 40, H + 40); }
+      if (shade) { ctx.fillStyle = shade; fullRect(); }
       if (Z.stars && Z.bg !== 'moon') { ctx.fillStyle = 'rgba(255,255,255,0.8)'; for (const st of STARS) if (st[1] < WATER_Y * 0.55) ctx.fillRect(st[0], st[1], st[2], st[2]); }
     } else if (Z.bg) drawBackdrop(Z);
     if (inArena(s.cliff) && !s.daily && !s.friend) drawBoss();
@@ -2992,12 +3006,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     const ePx = edgePx();
     const rock = artW && rockPattern(artW.n);
     ctx.fillStyle = rock || s.surface.side;
-    ctx.fillRect(-2000, GROUND_Y + 14, ePx + 2000, 3000);
+    ctx.fillRect(-6000, GROUND_Y + 14, ePx + 6000, 3000);
     if (rock) {
       // painted rock face: a soft shadow under the road (keeps the ruler readable) and a darker edge
       const sh = ctx.createLinearGradient(0, GROUND_Y + 14, 0, GROUND_Y + 64);
       sh.addColorStop(0, 'rgba(28,18,12,0.72)'); sh.addColorStop(1, 'rgba(28,18,12,0)');
-      ctx.fillStyle = sh; ctx.fillRect(-2000, GROUND_Y + 14, ePx + 2000, 50);
+      ctx.fillStyle = sh; ctx.fillRect(-6000, GROUND_Y + 14, ePx + 6000, 50);
       const ed = ctx.createLinearGradient(ePx - 22, 0, ePx, 0);
       ed.addColorStop(0, 'rgba(28,18,12,0)'); ed.addColorStop(1, 'rgba(28,18,12,0.45)');
       ctx.fillStyle = ed; ctx.fillRect(ePx - 22, GROUND_Y + 14, 22, 3000);
@@ -3013,7 +3027,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.translate(EDGE_X, GROUND_Y); ctx.rotate(ang); ctx.translate(-EDGE_X, GROUND_Y * -1);
     // the road top, one colour per piece of ground (ground can change along the road)
     for (const g of Physics.segments(s.spec)) {
-      const x0 = g.x0 === 0 ? -2000 : EDGE_X - (s.dist - g.x0) * PPM, x1 = Math.min(ePx, EDGE_X - (s.dist - g.x1) * PPM);
+      const x0 = g.x0 === 0 ? -6000 : EDGE_X - (s.dist - g.x0) * PPM, x1 = Math.min(ePx, EDGE_X - (s.dist - g.x1) * PPM);
       if (x1 <= x0) continue;
       ctx.fillStyle = SURFACES[g.si].top;
       ctx.fillRect(x0, GROUND_Y, x1 - x0, 14);
@@ -3086,9 +3100,9 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 
     // sea drawn over the pieces so sinking parts look underwater
     ctx.fillStyle = bgArt && artW.info.sea && Z !== SNOW_NIGHT && Z !== SNOW_DUSK ? `rgba(${artW.info.sea.join(',')},0.9)` : Z.sea;     // the painted world's own sea colour
-    ctx.fillRect(-2000, WATER_Y, 6000, 3000);
+    ctx.fillRect(-8000, WATER_Y, 24000, 3000);
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.fillRect(-2000, WATER_Y, 6000, 3);
+    ctx.fillRect(-8000, WATER_Y, 24000, 3);
 
     for (const p of particles) {
       ctx.globalAlpha = 0.8 * (1 - p.t / p.life);
@@ -3284,7 +3298,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (shareVisible()) drawShareBtn();
     if (challengeVisible()) drawChallengeBtn();
     // V4: white flash on a perfect stop
-    if (s.flashAt) { const f = 1 - (performance.now() - s.flashAt) / 260; if (f > 0) { ctx.fillStyle = `rgba(255,255,255,${0.55 * f})`; ctx.fillRect(-20, -20, W + 40, H + 40); } }
+    if (s.flashAt) { const f = 1 - (performance.now() - s.flashAt) / 260; if (f > 0) { ctx.fillStyle = `rgba(255,255,255,${0.55 * f})`; fullRect(); } }
     if (performance.now() < toast.until) {
       ctx.fillStyle = 'rgba(10,10,25,0.8)';
       const lines = toast.msg.split('\n');
@@ -3308,6 +3322,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
   requestAnimationFrame(frame);
   window.__cliff = () => s;   // used only for automated testing
+  window.__toClient = (lx, ly) => { const r = canvas.getBoundingClientRect(); return { x: r.left + (lx + PAD) * scale, y: r.top + ly * scale }; };   // testing only
   window.__garage = { open: () => { screen = 'garage'; }, state: () => ({ screen, skin: skin.id, owned: owned.slice(), coins }) };   // testing only
   window.__art = () => ({ car: artReady('car_pinky'), cars: SKINS.filter(k => carArt(k)).length, wheel: artReady('wheel'), bg1: artReady('bg1'), bg2: artReady('bg2'), rock1: artReady('rock1'), rock2: artReady('rock2'), all: Object.keys(ART).length > 0 && Object.keys(ART).every(artReady), count: Object.keys(ART).length, music: Sound.music(), musicTime: Sound.musicTime(), musicData: Object.keys(ART_DATA.music || {}).length, carArt: !!carArt(), world: (worldArt(zoneOf(s)) || {}).n || 0 });   // testing only
   window.__physics = Physics;   // used only for automated testing and tools/sim

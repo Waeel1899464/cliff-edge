@@ -15,9 +15,10 @@ const HELP = `
     return window.__cliff();
   };
   window.__tap = (x, y) => {               // tap at logical canvas coordinates (540x960)
-    const c = document.getElementById('game'), r = c.getBoundingClientRect(), k = r.width / 540;
+    const c = document.getElementById('game'), r = c.getBoundingClientRect(), k = r.height / 960;
+    const pt = window.__toClient ? window.__toClient(x, y) : { x: r.left + x * k, y: r.top + y * k };   // wide screens: middle column
     for (const type of ['pointerdown', 'pointerup']) {
-      const e = new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 5, clientX: r.left + x * k, clientY: r.top + y * k });
+      const e = new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 5, clientX: pt.x, clientY: pt.y });
       Object.defineProperty(e, 'timeStamp', { value: window.__T() });
       (type === 'pointerdown' ? c : window).dispatchEvent(e);
     }

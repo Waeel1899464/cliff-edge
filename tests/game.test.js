@@ -217,7 +217,9 @@ const PLAY = `
       const box = await page.locator('canvas').boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.6); await page.mouse.down(); await page.waitForTimeout(2600); await page.mouse.up();
       await page.waitForTimeout(2500); await page.mouse.click(box.x + box.width / 2, box.y + box.height * 0.6); await page.waitForTimeout(300);
-      const sc = box.width / 540; await page.mouse.click(box.x + (540 - 44) * sc, box.y + 50 * sc); await page.waitForTimeout(100);
+      const mp = await page.evaluate(() => window.__toClient ? window.__toClient(540 - 44, 50) : null);   // the sound button (wide screens: middle column)
+      if (mp) await page.mouse.click(mp.x, mp.y); else { const sc = box.width / 540; await page.mouse.click(box.x + (540 - 44) * sc, box.y + 50 * sc); }
+      await page.waitForTimeout(100);
       const after = await page.evaluate(() => Object.keys(localStorage).sort().map(k => [k, localStorage.getItem(k)]));
       const untouched = JSON.stringify(after.filter(([k]) => !k.startsWith('cg3_'))) === before;
       const own = after.filter(([k]) => k.startsWith('cg3_')).map(([k]) => k);
@@ -228,7 +230,7 @@ const PLAY = `
       const html = require('fs').readFileSync(require('path').join(__dirname, '..', V2), 'utf8').replace("window.CLIFF_STORE_PREFIX = 'cg3_'", "window.CLIFF_STORE_PREFIX = '../Evil-prefix'");
       await page.route('**/bad-prefix.html', r => r.fulfill({ contentType: 'text/html', body: html }));
       await page.goto(srv.url + '/bad-prefix.html'); await page.waitForFunction(() => typeof window.__cliff === 'function');
-      await page.mouse.click(box.x + (540 - 44) * sc, box.y + 50 * sc); await page.waitForTimeout(100);
+      const mp2 = await page.evaluate(() => window.__toClient(540 - 44, 50)); await page.mouse.click(mp2.x, mp2.y); await page.waitForTimeout(100);
       const keys = await page.evaluate(() => Object.keys(localStorage));
       check('isolation: an invalid storage prefix is refused (falls back to cg_)', !keys.some(k => /evil/i.test(k)) && keys.includes('cg_cliff_dev'));
       await ctx.close();

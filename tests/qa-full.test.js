@@ -107,7 +107,7 @@ const seed = (o = {}) => IN_PAGE + HELP + Object.entries(Object.assign({ rounds:
       const errs = []; page.on('pageerror', e => errs.push(String(e)));
       await page.addInitScript(() => localStorage.setItem('cg3_cliff_rounds', '10'));
       await page.goto(srv.url + PAGE); await page.waitForTimeout(300);
-      const fit = await page.evaluate(() => { const r = document.querySelector('canvas').getBoundingClientRect(); return r.left >= -1 && r.top >= -1 && r.right <= innerWidth + 1 && r.bottom <= innerHeight + 1 && Math.abs(r.width / r.height - 0.5625) < 0.01 && document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight; });
+      const fit = await page.evaluate(() => { const r = document.querySelector('canvas').getBoundingClientRect(); return r.left >= -1 && r.top >= -1 && r.right <= innerWidth + 1 && r.bottom <= innerHeight + 1 && (innerWidth / innerHeight > 0.5625 * 1.15 ? Math.abs(r.height - innerHeight) < 2 && Math.abs(r.width - Math.min(innerWidth, innerHeight * 2.2)) < 2 : Math.abs(r.width / r.height - 0.5625) < 0.01) && document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight; });
       const box = await page.locator('canvas').boundingBox(); const pt = { x: box.x + box.width / 2, y: box.y + box.height * 0.62 };
       let h, s2;
       if (o.hasTouch) {
@@ -125,7 +125,7 @@ const seed = (o = {}) => IN_PAGE + HELP + Object.entries(Object.assign({ rounds:
         await page.keyboard.down('Space'); await page.waitForTimeout(300); const kh = await page.evaluate(() => __cliff().state); await page.keyboard.up('Space');
         key = kh;
       }
-      check(`${name}: fits the screen (9:16, no scroll), press drives, release brakes${o.hasTouch ? ' (touch)' : ' (mouse), Space drives'}`,
+      check(`${name}: fits the screen (phones 9:16; wide screens use the whole width up to 2.2:1; no scroll), press drives, release brakes${o.hasTouch ? ' (touch)' : ' (mouse), Space drives'}`,
         fit && h === 'holding' && ['sliding', 'stopped', 'falling'].includes(s2) && (o.hasTouch || key === 'holding') && errs.length === 0, `${h} -> ${s2}${o.hasTouch ? '' : ', key ' + key}`);
       await ctx.close();
     }
