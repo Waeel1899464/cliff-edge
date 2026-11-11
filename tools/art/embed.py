@@ -12,7 +12,9 @@ for n in range(1, 6):
         if os.path.exists(os.path.join(A, f)): files[key + str(n)] = f
 img = {k: 'data:image/webp;base64,' + base64.b64encode(open(os.path.join(A, f), 'rb').read()).decode() for k, f in files.items()}
 info = json.load(open(os.path.join(A, 'art.json')))
+font_path = os.path.join(ROOT, 'design/fonts/lilita-one-latin-400-normal.woff2')   # Lilita One, SIL Open Font License
+font = 'data:font/woff2;base64,' + base64.b64encode(open(font_path, 'rb').read()).decode() if os.path.exists(font_path) else None
 with open(os.path.join(A, 'art-data.js'), 'w') as f:
     f.write('  // Game images (made with AI by the owner, processed by tools/art). Generated file: do not edit.\n')
-    f.write('  const ART_DATA = ' + json.dumps({'img': img, 'info': info}, separators=(',', ':')) + ';\n')
+    f.write('  const ART_DATA = ' + json.dumps({'img': img, 'info': info, 'font': font}, separators=(',', ':')) + ';\n')
 print('art-data.js', os.path.getsize(os.path.join(A, 'art-data.js')), 'bytes;', ', '.join(files))

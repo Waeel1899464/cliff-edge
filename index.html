@@ -37,7 +37,7 @@
     display: flex; align-items: center; justify-content: center;
     background: rgba(8, 9, 20, 0.72);
     padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-family: "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
   .sheet-card {
     width: 100%; max-width: 360px;
@@ -52,7 +52,7 @@
   .sheet-btn {
     display: flex; align-items: center; justify-content: center;
     min-height: 52px; padding: 0 16px; border-radius: 26px; border: 0;
-    font: 800 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font: 800 17px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     text-decoration: none; cursor: pointer;
     background: #2c3050; color: #ffffff;
   }
@@ -541,6 +541,15 @@
   const ART = {};
   for (const [k, src] of Object.entries(ART_DATA.img || {})) { const im = new Image(); im.decoding = 'async'; im.src = src; ART[k] = im; }
   const artReady = k => !!(ART[k] && ART[k].complete && ART[k].naturalWidth > 0);
+  // Game font (Lilita One, free under the SIL Open Font License). It covers every weight the game asks
+  // for, so the browser never fakes a bold. Until it has loaded, the phone's own font is used.
+  let fontReady = false;
+  if (ART_DATA.font && typeof FontFace === 'function') {
+    try {
+      const ff = new FontFace('Lilita One', `url(${ART_DATA.font})`, { weight: '100 900' });
+      ff.load().then(f => { document.fonts.add(f); fontReady = true; }).catch(() => {});
+    } catch (e) {}
+  }
   // Car picture layout (logical px). The front of the picture is the car's front (the physics
   // measures the gap from it); the picture reaches a little further back than the old car.
   const CAR_ART = (() => {
@@ -1577,7 +1586,7 @@
     const g = c.getContext('2d');
     const bg = g.createLinearGradient(0, 0, 0, 1080); bg.addColorStop(0, '#2a1f5c'); bg.addColorStop(0.65, '#ff7a59'); bg.addColorStop(1, '#ffb36b');
     g.fillStyle = bg; g.fillRect(0, 0, 1080, 1080);
-    const t = (str, y, size, col) => { g.font = `900 ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`; g.textAlign = 'center'; g.lineWidth = size * 0.16; g.strokeStyle = 'rgba(10,10,25,0.85)'; g.strokeText(str, 540, y); g.fillStyle = col; g.fillText(str, 540, y); };
+    const t = (str, y, size, col) => { g.font = `900 ${size}px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`; g.textAlign = 'center'; g.lineWidth = size * 0.16; g.strokeStyle = 'rgba(10,10,25,0.85)'; g.strokeText(str, 540, y); g.fillStyle = col; g.fillText(str, 540, y); };
     t('CLIFF EDGE', 180, 110, '#ffd23f');
     t('ALL 5 WORLDS', 420, 96, '#ffffff');
     t('COMPLETED!', 530, 96, '#ffffff');
@@ -1913,7 +1922,7 @@
   function fmtTarget(cm) { return cm >= 100 ? (cm / 100) + ' m' : (cm >= 10 ? Math.round(cm) : cm.toFixed(1)) + ' cm'; }
 
   function text(str, x, y, size, color, weight = 800, align = 'center') {
-    ctx.font = `${weight} ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.font = `${weight} ${size}px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
     ctx.textAlign = align;
     ctx.textBaseline = 'middle';
     ctx.lineWidth = size * 0.18;
@@ -2111,7 +2120,7 @@
     ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2 + 5, b.w, b.h, b.h / 2); ctx.fill();
     ctx.fillStyle = fill;
     ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
-    ctx.font = `900 ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.font = `900 ${size}px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(label).width;
     const ix = -tw / 2 - 8;
@@ -2170,7 +2179,7 @@
     ctx.translate(b.x, b.y);
     ctx.fillStyle = s.daily ? 'rgba(255,255,255,0.9)' : 'rgba(10,10,25,0.4)';
     ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
-    ctx.font = '900 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.font = '900 17px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = s.daily ? '#12141f' : '#ffffff';
     const label = s.daily ? '✕ EXIT DAILY' : (streak > 0 ? `DAILY 🔥${streak}` : 'DAILY');
@@ -2194,7 +2203,7 @@
       const x = ex - m * PPM;
       ctx.fillStyle = 'rgba(255,255,255,0.75)';
       ctx.fillRect(x - 1, top, 2, 12);
-      ctx.font = '800 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.font = '800 14px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
       ctx.fillStyle = 'rgba(255,255,255,0.7)';
       ctx.fillText(m + 'm', x, top + 26);
     }
@@ -2204,7 +2213,7 @@
       ctx.fillStyle = 'rgba(255,255,255,0.6)';
       ctx.fillRect(x - 0.5, top, 1, 6);
       if (cam.z > 1.6) {
-        ctx.font = '800 5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.font = '800 5px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
         ctx.fillText(label, x, top + 11);
       }
     });
@@ -2215,7 +2224,7 @@
         ctx.strokeStyle = 'rgba(255,210,63,0.95)'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
         ctx.beginPath(); ctx.moveTo(x, top - 68); ctx.lineTo(x, top); ctx.stroke();
         ctx.setLineDash([]);
-        ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.font = '900 14px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
         ctx.fillStyle = '#ffd23f';
         ctx.fillText('LAST RELEASE', x, top - 76);     // where you let go on your previous try (above LAST STOP)
       }
@@ -2223,7 +2232,7 @@
         const len = CAR_LEN * PPM, x = lastTry.stop * PPM - len;
         ctx.fillStyle = 'rgba(255,255,255,0.28)';
         ctx.beginPath(); ctx.roundRect(x, top - WHEEL_R * 2 - CAR_H - 2, len, CAR_H + WHEEL_R * 2 + 2, 10); ctx.fill();
-        ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.font = '900 14px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
         ctx.fillStyle = 'rgba(255,255,255,0.9)';
         ctx.fillText('LAST STOP', x + len / 2, top - WHEEL_R * 2 - CAR_H - 12);
       }
@@ -2385,13 +2394,13 @@
   function drawPillBtn(b, label, fill, ink, size) {
     ctx.fillStyle = 'rgba(10,10,25,0.45)'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2 + 4, b.w, b.h, b.h / 2); ctx.fill();
     ctx.fillStyle = fill; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
-    ctx.font = `900 ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.font = `900 ${size}px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = ink; ctx.fillText(label, b.x, b.y + 1);
   }
   function drawNewBadge(x, y) {
     ctx.save(); ctx.translate(x, y); ctx.rotate(0.18);
     ctx.fillStyle = '#ff3355'; ctx.beginPath(); ctx.roundRect(-24, -11, 48, 22, 11); ctx.fill();
-    ctx.font = '900 13px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.font = '900 13px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff'; ctx.fillText('NEW!', 0, 1);
     ctx.restore();
   }
@@ -2592,7 +2601,7 @@
     ctx.save(); ctx.translate(b.x, b.y);
     ctx.fillStyle = 'rgba(10,10,25,0.4)';
     ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
-    ctx.font = '900 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.font = '900 17px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff';
     ctx.fillText('MAP', 8, 1);
     ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;   // small folded-map icon
@@ -2692,7 +2701,7 @@
       const arena = inArena(nd.n) && !boss;     // boss battle phases
       ctx.fillStyle = boss ? '#ff8a5c' : arena ? '#ffd2bd' : reached ? '#ffffff' : 'rgba(255,255,255,0.6)';
       ctx.beginPath(); ctx.arc(nd.x, nd.y, boss ? 19 : 16, 0, Math.PI * 2); ctx.fill();
-      ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.font = '900 14px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#12141f';
       ctx.fillText(boss ? 'B' : String(nd.k + 1), nd.x, nd.y + 1);
       const st = stars[nd.n] || 0;
@@ -2715,7 +2724,7 @@
     const b = MAP_PLAY;
     ctx.fillStyle = 'rgba(10,10,25,0.45)'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2 + 6, b.w, b.h, b.h / 2); ctx.fill();
     ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
-    ctx.font = '900 28px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.font = '900 28px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#12141f';
     ctx.fillText(storyDone() ? 'PLAY ENDLESS' : 'PLAY ' + cliffLabel(cliff).replace('CLIFF ', ''), b.x, b.y + 1);
     if (mapAnim) { /* the travel title is drawn instead */ }
@@ -2819,13 +2828,13 @@
     ctx.closePath();
     ctx.fillStyle = '#e8243c'; ctx.fill();
     ctx.lineWidth = 1.5; ctx.strokeStyle = '#ffffff'; ctx.stroke();
-    ctx.font = '900 6.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.font = '900 6.5px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff';
     ctx.fillText('STOP', sx, sy + 0.5);
     ctx.restore();
 
     // Ground type, written on the cliff face instead of the top of the screen.
-    ctx.font = '800 18px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.font = '800 18px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
     ctx.fillStyle = rock ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.55)';
     if (rock) { ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(28,18,12,0.7)'; ctx.lineJoin = 'round'; }
@@ -2838,7 +2847,7 @@
     for (const g of Physics.segments(s.spec).slice(1)) {
       const x0 = EDGE_X - (s.dist - g.x0) * PPM;
       ctx.fillStyle = SURFACES[g.si].top; ctx.fillRect(x0, GROUND_Y + 14, 2, 74);
-      ctx.font = '900 13px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.font = '900 13px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
       ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(255,255,255,0.85)';
       ctx.fillText(SURFACES[g.si].name, x0 + 5, GROUND_Y + 82);
     }
@@ -2855,7 +2864,7 @@
     if (s.helper === 'ball' && !s.parts && (s.state === 'ready' || s.state === 'holding')) {
       const x = s.idealFront * PPM, glow = 0.6 + 0.4 * Math.sin(performance.now() / 150);
       ctx.strokeStyle = `rgba(180,140,255,${glow})`; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(x, GROUND_Y - 60); ctx.lineTo(x, GROUND_Y); ctx.stroke();
-      ctx.font = '900 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#d9c4ff';
+      ctx.font = '900 14px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#d9c4ff';
       ctx.fillText('LET GO HERE', x, GROUND_Y - 70);
     }
     if (s.helper === 'sandbag') {
@@ -2898,7 +2907,7 @@
 
     // Game link on the end screens; every recorded clip ends on one, so clips carry it. Web build only.
     if (!IS_PORTAL && roundEnded()) {
-    ctx.font = '700 17px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.font = '700 17px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgba(10,10,25,0.45)';
     ctx.beginPath(); ctx.roundRect(W / 2 - 168, 930, 336, 26, 13); ctx.fill();
