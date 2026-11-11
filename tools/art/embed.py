@@ -5,7 +5,9 @@ Usage: python3 tools/art/embed.py   (after tools/art/process.py)
 import os, json, base64
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 A = os.path.join(ROOT, 'design/art')
-files = {'car': 'car-body.webp', 'wheel': 'wheel.webp'}
+files = {'wheel': 'wheel.webp'}
+for cid in ('pinky', 'lime', 'ocean', 'sunny', 'night', 'lava'):
+    if os.path.exists(os.path.join(A, f'car-{cid}.webp')): files['car_' + cid] = f'car-{cid}.webp'
 for n in range(1, 6):
     for kind, key in (('bg', 'bg'), ('rock', 'rock')):
         f = f'world{n}-{kind}.webp'

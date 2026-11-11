@@ -67,24 +67,62 @@ def src(name):
     return m[0] if m else None
 
 info = {'worlds': {}}
-car = key_green(src('car-body')).transpose(Image.FLIP_LEFT_RIGHT)
+
+def arches_of(car):
+    """Finds the two wheel arches: openings at the bottom that are empty (see-through) or painted dark.
+    Returns [{cx, r, top}] as fractions of the picture (cx, r of the width; top of the height)."""
+    a = np.asarray(car).astype(np.float32)
+    H, Wd = a.shape[:2]
+    inside = a[..., 3] > 128
+    lum = 0.3 * a[..., 0] + 0.59 * a[..., 1] + 0.11 * a[..., 2]
+    well = (~inside) | (lum < 75)
+    well[: int(H * 0.5)] = False
+    score = well[int(H * 0.8): int(H * 0.97)].mean(axis=0)
+    # only columns under the body (not the empty space beside it)
+    cols = np.nonzero(inside.any(axis=0))[0]
+    runs, x = [], cols.min()
+    while x <= cols.max():
+        if score[x] > 0.6:
+            x0 = x
+            while x <= cols.max() and score[x] > 0.6: x += 1
+            if x - x0 > Wd * 0.08: runs.append((x0, x - 1))
+        x += 1
+    runs = sorted(sorted(runs, key=lambda r: r[1] - r[0])[-2:])
+    out = []
+    for x0, x1 in runs:
+        cx = (x0 + x1) // 2
+        y = H - 1
+        while y > H * 0.4 and well[y, cx]: y -= 1
+        out.append({'cx': round(cx / Wd, 4), 'r': round((x1 - x0) / 2 / Wd, 4), 'top': round((y + 1) / H, 4)})
+    return out
+
+# The cars (one per colour in the shop). flip: the picture faces left and is mirrored.
+# face: where the eye looks out of the window (fractions of the picture), and its size.
+CARS = {
+    # arches given by hand where the picture fools the detector (cx, r of the width; top of the height)
+    'pinky': {'src': 'car-body', 'flip': True, 'face': [0.52, 0.36, 0.68],
+              'arches': [{'cx': 0.1965, 'r': 0.105, 'top': 0.778}, {'cx': 0.7816, 'r': 0.105, 'top': 0.778}]},
+    'lime':  {'src': 'car-jeep', 'face': [0.54, 0.30, 0.66]},
+    'ocean': {'src': 'car-pickup', 'face': [0.60, 0.32, 0.66],
+              'arches': [{'cx': 0.233, 'r': 0.115, 'top': 0.70}, {'cx': 0.767, 'r': 0.108, 'top': 0.70}]},
+    'sunny': {'src': 'car-taxi', 'face': [0.45, 0.38, 0.70]},
+    'night': {'src': 'car-space', 'face': [0.60, 0.34, 0.70],
+              'arches': [{'cx': 0.25, 'r': 0.10, 'top': 0.75}, {'cx': 0.733, 'r': 0.10, 'top': 0.75}]},
+    'lava':  {'src': 'car-race', 'face': [0.50, 0.30, 0.56]},
+}
+info['cars'] = {}
+for cid, c in CARS.items():
+    p = src(c['src'])
+    if not p: continue
+    car = key_green(p)
+    if c.get('flip'): car = car.transpose(Image.FLIP_LEFT_RIGHT)
+    arch = c.get('arches') or arches_of(car)
+    if len(arch) != 2: print('WARNING: wheel arches not found for', cid, arch); continue
+    k = 480 / car.width
+    car.resize((480, round(car.height * k)), Image.LANCZOS).save(os.path.join(OUT, f'car-{cid}.webp'), quality=88, method=6)
+    info['cars'][cid] = {'w': 480, 'h': round(car.height * k), 'arches': arch, 'face': c['face']}
+    if cid == 'pinky': info.update(car_w=car.width, car_h=car.height, arches=arch)   # the first V4 layout reads these
 wheel = key_green(src('wheel'))
-A = np.asarray(car.getchannel('A')) > 128
-H, Wd = A.shape
-low = np.array([np.max(np.nonzero(A[:, x])[0]) if A[:, x].any() else -1 for x in range(Wd)])
-gap = (H - 1 - low) > H * 0.015
-arches, x = [], 0
-while x < Wd:
-    if gap[x] and low[x] >= 0:
-        x0 = x
-        while x < Wd and gap[x]: x += 1
-        if x - x0 > Wd * 0.08: arches.append((x0, x - 1))
-    x += 1
-info.update(car_w=Wd, car_h=H, arches=[])
-for x0, x1 in arches:
-    top = H - 1 - int((H - 1 - low[x0:x1 + 1]).max())
-    info['arches'].append({'cx': round((x0 + x1) / 2 / Wd, 4), 'r': round((x1 - x0) / 2 / Wd, 4), 'top': round(top / H, 4)})
-car.resize((480, round(480 * H / Wd)), Image.LANCZOS).save(os.path.join(OUT, 'car-body.webp'), quality=88, method=6)
 wheel.resize((128, 128), Image.LANCZOS).save(os.path.join(OUT, 'wheel.webp'), quality=88, method=6)
 
 BOSS_NAMES = {1: 'boss1-hill', 2: 'boss2-sandstorm', 3: 'boss3-blizzard', 4: 'boss4-crater', 5: 'boss5-volcano'}

@@ -524,14 +524,15 @@
   // V3: car colours for coins (cosmetic only, never anything that changes a result). The shop screen
   // is prepared but switched off during testing (SHOP_ENABLED); every colour costs coins, none is sold for money yet.
   const SKINS = [
-    { id: 'pinky', name: 'Pinky', body: '#ff4f7b', shade: '#d93a64', roof: '#ffd23f', ball: '#7ef9ff', price: 0 },
-    { id: 'lime',  name: 'Lime',  body: '#7ed957', shade: '#5bb33a', roof: '#ffffff', ball: '#ff4f7b', price: 150 },
-    { id: 'ocean', name: 'Ocean', body: '#3fa8ff', shade: '#2a84d6', roof: '#ffd23f', ball: '#ffffff', price: 300 },
-    { id: 'sunny', name: 'Sunny', body: '#ffc531', shade: '#e0a10f', roof: '#ff4f7b', ball: '#7ef9ff', price: 450 },
-    { id: 'night', name: 'Night', body: '#3b3f5c', shade: '#272a40', roof: '#7ef9ff', ball: '#ffd23f', price: 700 },
-    { id: 'lava',  name: 'Lava',  body: '#ff6a1a', shade: '#d14e0a', roof: '#2b1410', ball: '#ffd23f', price: 1000 },
+    { id: 'pinky', name: 'PINKY',     body: '#f07ba3', shade: '#d93a64', roof: '#ffd23f', ball: '#7ef9ff', price: 0 },
+    { id: 'lime',  name: 'JEEP',      body: '#9cbc3c', shade: '#5bb33a', roof: '#ffffff', ball: '#ff4f7b', price: 150 },
+    { id: 'ocean', name: 'PICKUP',    body: '#3f7fb0', shade: '#2a84d6', roof: '#ffd23f', ball: '#ffffff', price: 300 },
+    { id: 'sunny', name: 'TAXI',      body: '#f6c03c', shade: '#e0a10f', roof: '#ff4f7b', ball: '#7ef9ff', price: 450 },
+    { id: 'night', name: 'SPACE CAR', body: '#25305a', shade: '#272a40', roof: '#7ef9ff', ball: '#ffd23f', price: 700 },
+    { id: 'lava',  name: 'RACER',     body: '#e8582e', shade: '#d14e0a', roof: '#2b1410', ball: '#ffd23f', price: 1000 },
   ];
-  const SHOP_ENABLED = false;
+  // V4: the garage is open (cars for coins earned in the game; nothing is sold for money).
+  const SHOP_ENABLED = true;
   let skin = SKINS[0];
 
   // ---- Game images (V4) ----
@@ -552,15 +553,21 @@
   }
   // Car picture layout (logical px). The front of the picture is the car's front (the physics
   // measures the gap from it); the picture reaches a little further back than the old car.
-  const CAR_ART = (() => {
-    const I = ART_DATA.info;
-    if (!I || !I.arches || I.arches.length !== 2) return null;
-    const w = 58, h = w * I.car_h / I.car_w, x = CAR_LEN * PPM / 2 - w;
-    const r = I.arches[0].r * w * 1.12;                                     // wheel radius, fills the arch
+  // Every car has the same wheel size; the picture is scaled so its arches fit that wheel.
+  const WHEEL_ART_R = 6.8;
+  const carLayouts = {};
+  function carLayout(id) {
+    if (id in carLayouts) return carLayouts[id];
+    const I = ART_DATA.info && ART_DATA.info.cars && ART_DATA.info.cars[id];
+    if (!I || !I.arches || I.arches.length !== 2) return (carLayouts[id] = null);
+    const a0 = I.arches[0];
+    const w = Math.max(48, Math.min(72, WHEEL_ART_R / (a0.r * 1.12))), h = w * I.h / I.w, x = CAR_LEN * PPM / 2 - w;
+    const r = a0.r * w * 1.12;                                              // wheel radius, fills the arch
     const wy = WHEEL_R - r;                                                // wheel centre, from the axle line
-    const top = wy - (I.arches[0].top * h + I.arches[0].r * w) + CAR_H / 2 + 2;   // picture top, body coords
-    return { w, h, x, top, r, wy, wheels: I.arches.map(a => x + a.cx * w), face: { x: -3, y: -4.5, k: 0.68 } };
-  })();
+    const top = wy - (a0.top * h + a0.r * w) + CAR_H / 2 + 2;              // picture top, body coords
+    const f = I.face || [0.52, 0.36, 0.68];
+    return (carLayouts[id] = { id, w, h, x, top, r, wy, wheels: I.arches.map(a => x + a.cx * w), face: { x: x + f[0] * w, y: top + f[1] * h, k: f[2] } });
+  }
   // Painted worlds: background, sea colour and rock face of the world on screen (story and Endless
   // looks; the daily and friend cliffs keep the original drawings). null = draw as before.
   const ART_WORLD = { hills: 1, dunes: 2, peaks: 3, moon: 4, volcano: 5 };
@@ -577,7 +584,7 @@
     catch (e) { return null; }
     return rockPats[n];
   }
-  function carArt() { return CAR_ART && skin === SKINS[0] && artReady('car') ? CAR_ART : null; }
+  function carArt(sk) { sk = sk || skin; const L = carLayout(sk.id); return L && artReady('car_' + sk.id) ? L : null; }
 
   // Endless cliffs. Progress is never wiped:
   //  - 3 hearts: a miss costs one heart and you retry the same cliff;
@@ -668,6 +675,10 @@
   const STAR_OF = { GOOD: 1, GREAT: 2, PERFECT: 3 };
   let stars = (() => { try { const v = JSON.parse(localStorage.getItem(storeKey('cliff_stars')) || '{}'); return v && typeof v === 'object' ? v : {}; } catch (e) { return {}; } })();
   let coins = clampInt(load('cliff_coins', 0), 0, 1e9);
+  // Garage: cars owned and the car in use (saved on the device). The first car is always owned.
+  let owned = (() => { const o = loadJSON('cliff_owned'); return Array.isArray(o) ? o.filter(id => SKINS.some(k => k.id === id)) : []; })();
+  if (!owned.includes('pinky')) owned.unshift('pinky');
+  skin = SKINS.find(k => k.id === loadJSON('cliff_skin') && owned.includes(k.id)) || SKINS[0];
   // Coins for a successful stop: the closer to the edge, the more (0-10), plus a bonus for GREAT/PERFECT.
   function coinReward(resultCm, targetCm, grade) {
     return Math.round(10 * Math.max(0, 1 - resultCm / targetCm)) + (grade === 'PERFECT' ? 15 : grade === 'GREAT' ? 5 : 0) + 1;
@@ -959,6 +970,7 @@
     if (challengeVisible() && inBtn(CHALLENGE_BTN, lx, ly)) { pendingChallenge = true; return; }
     if (shareVisible() && inShareBtn(lx, ly)) { pendingShare = true; return; }
     if (screen === 'map') { mapTap(lx, ly); return; }
+    if (screen === 'garage') { garageTap(lx, ly); return; }
     if (rescueBtnVisible() && inBtn(RESCUE_BTN, lx, ly)) { acceptRescue(); return; }
     if (s.rescue && s.rescue.state === 'anim') return;
     if (helperVisible()) for (let i = 0; i < 3; i++) if (inBtn(helperBtn(i), lx, ly)) { useHelper(HELPERS[i].id); return; }
@@ -981,6 +993,7 @@
   function pressGame(id, t) {
     const now = performance.now();
     if (screen === 'map') { if (mapAnim) endMapAnim(); else closeMap(null); return; }   // keyboard on the map = PLAY
+    if (screen === 'garage') { screen = 'map'; return; }                                  // keyboard in the garage = back
     if (s.state === 'ready') {
       // A daily screen opened before midnight (UTC) shows yesterday's cliff: switch to today's
       // cliff first, without using a try. The player presses again to play it.
@@ -1181,7 +1194,7 @@
 
     function update(st) {
       if (!ac) return;
-      music(screen === 'map' || !inArena(st.cliff) || st.daily || st.friend || st.endless ? 'main' : 'boss');
+      music(screen !== 'game' || !inArena(st.cliff) || st.daily || st.friend || st.endless ? 'main' : 'boss');
       const t = ac.currentTime;
       const driving = st.state === 'holding';
       const sliding = st.state === 'sliding';
@@ -1975,7 +1988,7 @@
 
   function drawWheel(x, y, rot, r) {
     if (artReady('wheel')) {
-      const R = r || (CAR_ART ? CAR_ART.r : WHEEL_R);
+      const R = r || (carArt() ? carArt().r : WHEEL_R);
       ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
       ctx.drawImage(ART.wheel, -R, -R, R * 2, R * 2);
       ctx.restore();
@@ -2012,15 +2025,15 @@
     ctx.restore();
 
     if (A) {
-      ctx.drawImage(ART.car, A.x, A.top, A.w, A.h);
+      ctx.drawImage(ART['car_' + A.id], A.x, A.top, A.w, A.h);
       if (braking) {                                   // brake light at the back of the picture
         ctx.fillStyle = '#ff1f3d'; ctx.shadowColor = '#ff1f3d'; ctx.shadowBlur = 14;
         ctx.beginPath(); ctx.roundRect(A.x - 1, A.top + A.h * 0.52, 4, 6, 2); ctx.fill();
         ctx.shadowBlur = 0;
       }
       // the same face, smaller, looking out of the side window
-      ctx.save(); ctx.translate(A.face.x, A.face.y); ctx.scale(A.face.k, A.face.k); ctx.translate(-13, 0);
-      drawFace(mood, '#f07ba3');
+      ctx.save(); ctx.translate(A.face.x, A.face.y); ctx.scale(A.face.k, A.face.k); ctx.translate(-13, 4);   // the eye sits on the window
+      drawFace(mood, skin.body);
       ctx.restore();
       ctx.restore();
       return;
@@ -2741,6 +2754,7 @@
   function mapTap(lx, ly) {
     if (mapAnim) { endMapAnim(); return; }
     if (inBtn(MAP_PLAY, lx, ly)) { closeMap(null); return; }
+    if (SHOP_ENABLED && inBtn(MAP_SHOP, lx, ly)) { screen = 'garage'; return; }
     for (const nd of mapNodes()) {
       if (Math.hypot(lx - nd.x, ly - nd.y) < 22 && nd.n <= Math.min(bestCliff, Physics.CLIFFS.length)) { closeMap(nd.n); return; }
     }
@@ -2754,10 +2768,11 @@
     starPath(40, 98, 11); ctx.fillStyle = '#ffd23f'; ctx.fill();
     text(`${total} / 150`, 58, 99, 20, '#ffffff', 900, 'left');
     drawCoinCount(170, 99);
-    // shop: prepared, switched off during testing
+    // the garage (cars for coins)
     const sb = MAP_SHOP;
-    ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.beginPath(); ctx.roundRect(sb.x - sb.w / 2, sb.y - sb.h / 2, sb.w, sb.h, sb.h / 2); ctx.fill();
-    text('SHOP · SOON', sb.x, sb.y + 1, 14, 'rgba(255,255,255,0.45)', 900);
+    ctx.fillStyle = SHOP_ENABLED ? '#ffd23f' : 'rgba(255,255,255,0.08)'; ctx.beginPath(); ctx.roundRect(sb.x - sb.w / 2, sb.y - sb.h / 2, sb.w, sb.h, sb.h / 2); ctx.fill();
+    if (SHOP_ENABLED) { ctx.font = '900 17px "Lilita One", system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#12141f'; ctx.fillText('GARAGE', sb.x, sb.y + 1); }
+    else text('SHOP · SOON', sb.x, sb.y + 1, 14, 'rgba(255,255,255,0.45)', 900);
     const nodes = mapNodes();
     for (let w = 0; w < 5; w++) {
       const L = WORLD_LOOKS[w], y0 = 150 + w * 136;
@@ -2822,7 +2837,76 @@
     else text('Tap a cliff you reached to replay it for stars', W / 2, 836, 16, 'rgba(255,255,255,0.7)', 700);
   }
 
+  // ---- Garage (V4): six cars, bought with coins earned in the game. Looks only: every car drives
+  // and stops exactly the same (the physics never reads the car).
+  const GARAGE_BACK = { x: 70, y: 54, w: 110, h: 40 };
+  const garageCard = i => ({ x: 140 + (i % 2) * 260, y: 250 + Math.floor(i / 2) * 230, w: 240, h: 210 });
+  function garageTap(lx, ly) {
+    if (inBtn(GARAGE_BACK, lx, ly)) { screen = 'map'; return; }
+    SKINS.forEach((k, i) => {
+      if (!inBtn(garageCard(i), lx, ly)) return;
+      if (owned.includes(k.id)) { skin = k; saveJSON('cliff_skin', k.id); Sound.pop(); return; }
+      if (coins >= k.price) {
+        coins -= k.price; save('cliff_coins', coins);
+        owned.push(k.id); saveJSON('cliff_owned', owned);
+        skin = k; saveJSON('cliff_skin', k.id);
+        garageFx = { i, t0: performance.now() }; Sound.perfect();
+      } else showToast(`${k.price - coins} more coins needed\nClear cliffs to earn coins`, 2200);
+    });
+  }
+  let garageFx = null;
+  function drawCarPreview(k, cx, cy, sc) {
+    const A = carArt(k);
+    ctx.save(); ctx.translate(cx, cy); ctx.scale(sc, sc);
+    if (A) {
+      for (const wx of A.wheels) drawWheel(wx, A.wy, 0, A.r);
+      ctx.translate(0, -CAR_H / 2 - 2);
+      ctx.drawImage(ART['car_' + k.id], A.x, A.top, A.w, A.h);
+      ctx.save(); ctx.translate(A.face.x, A.face.y); ctx.scale(A.face.k, A.face.k); ctx.translate(-13, 4); drawFace('calm', k.body); ctx.restore();
+    } else {
+      const old = skin; skin = k; drawWheel(-13, 0, 0, WHEEL_R); drawWheel(13, 0, 0, WHEEL_R); ctx.translate(0, -CAR_H / 2 - 2); drawBody(false, 'calm'); skin = old;
+    }
+    ctx.restore();
+  }
+  function drawGarage() {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#141629'); g.addColorStop(1, '#22163a');
+    ctx.fillStyle = g; ctx.fillRect(-20, -20, W + 40, H + 40);
+    const b = GARAGE_BACK;
+    ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
+    text('◀ MAP', b.x, b.y + 1, 18, '#ffffff', 900);
+    text('GARAGE', W / 2 + 40, 54, 30, '#ffffff', 900);
+    drawCoinCount(W - 120, 54);
+    text('Cars change the look only. Every car stops the same.', W / 2, 112, 15, 'rgba(255,255,255,0.7)', 700);
+    SKINS.forEach((k, i) => {
+      const c = garageCard(i), have = owned.includes(k.id), sel = skin === k, can = coins >= k.price;
+      const fx = garageFx && garageFx.i === i ? Math.max(0, 1 - (performance.now() - garageFx.t0) / 600) : 0;
+      ctx.save(); ctx.translate(c.x, c.y); ctx.scale(1 + 0.08 * fx, 1 + 0.08 * fx);
+      ctx.fillStyle = sel ? 'rgba(255,210,63,0.22)' : 'rgba(255,255,255,0.08)';
+      ctx.beginPath(); ctx.roundRect(-c.w / 2, -c.h / 2, c.w, c.h, 18); ctx.fill();
+      if (sel) { ctx.lineWidth = 3; ctx.strokeStyle = '#ffd23f'; ctx.stroke(); }
+      ctx.globalAlpha = have || can ? 1 : 0.5;
+      drawCarPreview(k, 0, 10, 2.2);
+      ctx.globalAlpha = 1;
+      text(k.name, 0, -c.h / 2 + 24, 20, '#ffffff', 900);
+      if (sel) text('IN USE', 0, c.h / 2 - 26, 18, '#ffd23f', 900);
+      else if (have) text('TAP TO USE', 0, c.h / 2 - 26, 16, '#ffffff', 900);
+      else { drawCoin(-30, c.h / 2 - 26, 9); text(String(k.price), -14, c.h / 2 - 25, 20, can ? '#ffe27a' : 'rgba(255,255,255,0.6)', 900, 'left'); }
+      ctx.restore();
+    });
+    if (performance.now() < toast.until) {
+      const lines = toast.msg.split('\n');
+      lines.forEach((ln, i) => text(ln, W / 2, 930 - (lines.length - 1) * 14 + i * 28, i === 0 ? 22 : 16, i === 0 ? '#ffd23f' : '#ffffff', 900));
+    }
+  }
+
   function draw() {
+    if (screen === 'garage') {
+      if (ctx.reset) ctx.reset();
+      ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+      drawGarage();
+      return;
+    }
     if (screen === 'map') {
       if (ctx.reset) ctx.reset();
       ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
@@ -3196,7 +3280,8 @@
   }
   requestAnimationFrame(frame);
   window.__cliff = () => s;   // used only for automated testing
-  window.__art = () => ({ car: artReady('car'), wheel: artReady('wheel'), bg1: artReady('bg1'), bg2: artReady('bg2'), rock1: artReady('rock1'), rock2: artReady('rock2'), all: Object.keys(ART).length > 0 && Object.keys(ART).every(artReady), count: Object.keys(ART).length, music: Sound.music(), musicTime: Sound.musicTime(), musicData: Object.keys(ART_DATA.music || {}).length, carArt: !!carArt(), world: (worldArt(zoneOf(s)) || {}).n || 0 });   // testing only
+  window.__garage = { open: () => { screen = 'garage'; }, state: () => ({ screen, skin: skin.id, owned: owned.slice(), coins }) };   // testing only
+  window.__art = () => ({ car: artReady('car_pinky'), cars: SKINS.filter(k => carArt(k)).length, wheel: artReady('wheel'), bg1: artReady('bg1'), bg2: artReady('bg2'), rock1: artReady('rock1'), rock2: artReady('rock2'), all: Object.keys(ART).length > 0 && Object.keys(ART).every(artReady), count: Object.keys(ART).length, music: Sound.music(), musicTime: Sound.musicTime(), musicData: Object.keys(ART_DATA.music || {}).length, carArt: !!carArt(), world: (worldArt(zoneOf(s)) || {}).n || 0 });   // testing only
   window.__physics = Physics;   // used only for automated testing and tools/sim
   window.__shareVisible = () => shareVisible();
 })();
