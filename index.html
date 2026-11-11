@@ -1152,8 +1152,36 @@
 
     const SKID = { ROAD: { f: 1800, q: 2, vol: 0.22 }, ICE: { f: 3400, q: 9, vol: 0.16 }, MUD: { f: 380, q: 1, vol: 0.35 }, SAND: { f: 900, q: 1.2, vol: 0.3 } };
 
+    // ---- Music (V4): the owner's AI tracks, inside the game file. They go through the same volume,
+    // mute button and background-tab pause as every sound, and into recorded clips. The main track
+    // plays everywhere; boss battles switch to the boss track with a short cross-fade.
+    const tracks = {};
+    let musicBus = null, musicNow = null;
+    function track(name) {
+      if (tracks[name] !== undefined) return tracks[name];
+      tracks[name] = null;
+      const src = ART_DATA.music && ART_DATA.music[name];
+      if (!src || !ac || !ac.createMediaElementSource) return null;
+      try {
+        if (!musicBus) { musicBus = ac.createGain(); musicBus.gain.value = 0.42; musicBus.connect(master); }
+        const el = new Audio(src); el.loop = true; el.preload = 'auto';
+        const g = ac.createGain(); g.gain.value = 0;
+        ac.createMediaElementSource(el).connect(g); g.connect(musicBus);
+        tracks[name] = { el, g };
+      } catch (e) {}
+      return tracks[name];
+    }
+    function music(name) {
+      if (!ac || name === musicNow) return;
+      const t = ac.currentTime, old = musicNow && tracks[musicNow], nu = name && track(name);
+      if (old) { old.g.gain.setTargetAtTime(0, t, 0.3); const el = old.el; setTimeout(() => { if (musicNow !== null && tracks[musicNow] && tracks[musicNow].el === el) return; el.pause(); }, 1500); }
+      musicNow = name;
+      if (nu) { const p = nu.el.play(); if (p && p.catch) p.catch(() => {}); nu.g.gain.setTargetAtTime(1, t, 0.3); }
+    }
+
     function update(st) {
       if (!ac) return;
+      music(screen === 'map' || !inArena(st.cliff) || st.daily || st.friend || st.endless ? 'main' : 'boss');
       const t = ac.currentTime;
       const driving = st.state === 'holding';
       const sliding = st.state === 'sliding';
@@ -1274,7 +1302,7 @@
       return recDest.stream.getAudioTracks()[0] || null;
     }
 
-    return { init, update, scream, screamBack, fail, splash, ding, bloop, fanfare, great, perfect, pop, toggleMute, streamTrack, isMuted: () => muted };
+    return { init, update, music: () => musicNow, musicTime: () => { const t = musicNow && tracks[musicNow]; return t ? (t.el.paused ? -1 : t.el.currentTime) : null; }, scream, screamBack, fail, splash, ding, bloop, fanfare, great, perfect, pop, toggleMute, streamTrack, isMuted: () => muted };
   })();
 
   // ---------- Clip recorder: each round is recorded as a vertical video ----------
@@ -3142,7 +3170,7 @@
   }
   requestAnimationFrame(frame);
   window.__cliff = () => s;   // used only for automated testing
-  window.__art = () => ({ car: artReady('car'), wheel: artReady('wheel'), bg1: artReady('bg1'), bg2: artReady('bg2'), rock1: artReady('rock1'), rock2: artReady('rock2'), all: Object.keys(ART).length > 0 && Object.keys(ART).every(artReady), count: Object.keys(ART).length, carArt: !!carArt(), world: (worldArt(zoneOf(s)) || {}).n || 0 });   // testing only
+  window.__art = () => ({ car: artReady('car'), wheel: artReady('wheel'), bg1: artReady('bg1'), bg2: artReady('bg2'), rock1: artReady('rock1'), rock2: artReady('rock2'), all: Object.keys(ART).length > 0 && Object.keys(ART).every(artReady), count: Object.keys(ART).length, music: Sound.music(), musicTime: Sound.musicTime(), musicData: Object.keys(ART_DATA.music || {}).length, carArt: !!carArt(), world: (worldArt(zoneOf(s)) || {}).n || 0 });   // testing only
   window.__physics = Physics;   // used only for automated testing and tools/sim
   window.__shareVisible = () => shareVisible();
 })();

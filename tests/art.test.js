@@ -21,12 +21,15 @@ const HELP = v3src.slice(v3src.indexOf('const HELP = `') + 14, v3src.indexOf('`;
     check('the default car uses the picture', a.carArt);
     const r = await page.evaluate(() => { const x = window.__play(3); window.__next(); const y = window.__play(-999); return { cleared: x.cleared, fell: y.state }; });
     check('a stop and a fall play normally with the pictures', r.cleared && r.fell === 'fell', JSON.stringify(r));
+    const m0 = await page.evaluate(() => window.__art());
+    check('both music tracks are inside the game file', m0.musicData === 2, String(m0.musicData));
+    check('after the first tap the main music plays', m0.music === 'main', String(m0.music));
     const perfect = await page.evaluate(() => { window.__next(); const x = window.__play(1); return { stars: x.stars, flash: !!x.flashAt }; });
     check('a perfect stop (3 stars) flashes the screen', perfect.stars === 3 && perfect.flash, JSON.stringify(perfect));
     check('no network requests (pictures are inside the file)', external.length === 0, external.join(' '));
     check('no page errors', errors.length === 0, errors.join(' | '));
     const size = fs.statSync(path.join(__dirname, '..', PAGE.slice(1))).size;
-    check('game file stays light (under 1.2 MB, loads in about a second on 4G)', size < 1200 * 1024, Math.round(size / 1024) + ' KB');
+    check('game file stays light (under 2.5 MB with the music: about 2 s on a phone network)', size < 2500 * 1024, Math.round(size / 1024) + ' KB');
     await ctx.close();
     // each painted world uses its own pictures, and a fall there plays normally
     for (const [cur, cp, n, name] of [[12, 11, 2, 'Desert'], [22, 21, 3, 'Snow Mountain'], [30, 26, 3, 'Snow boss at night'], [32, 31, 4, 'Moon'], [42, 41, 5, 'Volcano'], [48, 46, 5, 'Volcano boss']]) {
@@ -37,6 +40,7 @@ const HELP = v3src.slice(v3src.indexOf('const HELP = `') + 14, v3src.indexOf('`;
       check(name + ' uses its painted world', w === n, String(w));
       const r = await page.evaluate(() => window.__play(-999).state);
       check('a fall plays normally (' + name + ')', r === 'fell', r);
+      if (name === 'Volcano boss' || name === 'Snow boss at night') check('boss battle switches to the boss music (' + name + ')', await page.evaluate(() => { window.__frame(16); return window.__art().music; }) === 'boss');
       check('no page errors (' + name + ')', errors.length === 0, errors.join(' | '));
       await ctx.close();
     }

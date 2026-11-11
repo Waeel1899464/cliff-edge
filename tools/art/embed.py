@@ -14,7 +14,11 @@ img = {k: 'data:image/webp;base64,' + base64.b64encode(open(os.path.join(A, f), 
 info = json.load(open(os.path.join(A, 'art.json')))
 font_path = os.path.join(ROOT, 'design/fonts/lilita-one-latin-400-normal.woff2')   # Lilita One, SIL Open Font License
 font = 'data:font/woff2;base64,' + base64.b64encode(open(font_path, 'rb').read()).decode() if os.path.exists(font_path) else None
+music = {}
+for name in ('main', 'boss'):
+    mp = os.path.join(A, f'music-{name}.mp3')
+    if os.path.exists(mp): music[name] = 'data:audio/mpeg;base64,' + base64.b64encode(open(mp, 'rb').read()).decode()
 with open(os.path.join(A, 'art-data.js'), 'w') as f:
     f.write('  // Game images (made with AI by the owner, processed by tools/art). Generated file: do not edit.\n')
-    f.write('  const ART_DATA = ' + json.dumps({'img': img, 'info': info, 'font': font}, separators=(',', ':')) + ';\n')
+    f.write('  const ART_DATA = ' + json.dumps({'img': img, 'info': info, 'font': font, 'music': music}, separators=(',', ':')) + ';\n')
 print('art-data.js', os.path.getsize(os.path.join(A, 'art-data.js')), 'bytes;', ', '.join(files))
