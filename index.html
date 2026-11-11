@@ -534,6 +534,26 @@
   const SHOP_ENABLED = false;
   let skin = SKINS[0];
 
+  // ---- Game images (V4) ----
+  // build.sh replaces the ART-DATA line with the images (data URIs) and their measurements.
+  // Every image is optional: until it has loaded, or if it fails, the original drawing is used.
+  const ART_DATA = { img: {}, info: null };   // ART-DATA: build.sh puts the images here
+  const ART = {};
+  for (const [k, src] of Object.entries(ART_DATA.img || {})) { const im = new Image(); im.decoding = 'async'; im.src = src; ART[k] = im; }
+  const artReady = k => !!(ART[k] && ART[k].complete && ART[k].naturalWidth > 0);
+  // Car picture layout (logical px). The front of the picture is the car's front (the physics
+  // measures the gap from it); the picture reaches a little further back than the old car.
+  const CAR_ART = (() => {
+    const I = ART_DATA.info;
+    if (!I || !I.arches || I.arches.length !== 2) return null;
+    const w = 58, h = w * I.car_h / I.car_w, x = CAR_LEN * PPM / 2 - w;
+    const r = I.arches[0].r * w * 1.12;                                     // wheel radius, fills the arch
+    const wy = WHEEL_R - r;                                                // wheel centre, from the axle line
+    const top = wy - (I.arches[0].top * h + I.arches[0].r * w) + CAR_H / 2 + 2;   // picture top, body coords
+    return { w, h, x, top, r, wy, wheels: I.arches.map(a => x + a.cx * w), face: { x: -3, y: -4.5, k: 0.68 } };
+  })();
+  function carArt() { return CAR_ART && skin === SKINS[0] && artReady('car') ? CAR_ART : null; }
+
   // Endless cliffs. Progress is never wiped:
   //  - 3 hearts: a miss costs one heart and you retry the same cliff;
   //  - a checkpoint every 5 cliffs (1, 6, 11, 16...): losing all hearts sends you back only to it;
@@ -1888,7 +1908,14 @@
     ctx.fillText(str, x, y);
   }
 
-  function drawWheel(x, y, rot) {
+  function drawWheel(x, y, rot, r) {
+    if (artReady('wheel')) {
+      const R = r || (CAR_ART ? CAR_ART.r : WHEEL_R);
+      ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+      ctx.drawImage(ART.wheel, -R, -R, R * 2, R * 2);
+      ctx.restore();
+      return;
+    }
     ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
     ctx.fillStyle = '#1b1d2b';
     ctx.beginPath(); ctx.arc(0, 0, WHEEL_R, 0, Math.PI * 2); ctx.fill();
@@ -1906,9 +1933,10 @@
     ctx.save();
     ctx.scale(1 + sq, 1 - sq);
 
+    const A = carArt();
     // antenna (springy) with a glowing ball
     ctx.save();
-    ctx.translate(-8, -h / 2 - 14);
+    ctx.translate(-8, A ? A.top + 1 : -h / 2 - 14);
     ctx.rotate(s.ant || 0);
     ctx.strokeStyle = '#2b2d42'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -16); ctx.stroke();
@@ -1917,6 +1945,21 @@
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.beginPath(); ctx.arc(-1.5, -19.5, 1.5, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
+
+    if (A) {
+      ctx.drawImage(ART.car, A.x, A.top, A.w, A.h);
+      if (braking) {                                   // brake light at the back of the picture
+        ctx.fillStyle = '#ff1f3d'; ctx.shadowColor = '#ff1f3d'; ctx.shadowBlur = 14;
+        ctx.beginPath(); ctx.roundRect(A.x - 1, A.top + A.h * 0.52, 4, 6, 2); ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+      // the same face, smaller, looking out of the side window
+      ctx.save(); ctx.translate(A.face.x, A.face.y); ctx.scale(A.face.k, A.face.k); ctx.translate(-13, 0);
+      drawFace(mood, '#f07ba3');
+      ctx.restore();
+      ctx.restore();
+      return;
+    }
 
     // roof dome
     ctx.fillStyle = skin.roof;
@@ -1941,6 +1984,12 @@
     ctx.beginPath(); ctx.roundRect(-len / 2 - 2, -h / 2 + 5, 5, 8, 2); ctx.fill();
     ctx.shadowBlur = 0;
 
+    drawFace(mood, skin.body);
+    ctx.restore();
+  }
+
+  // The face (cheek, eye, eyebrow, mouth, sweat) around (13, 0). lid = body colour for the sad eyelid.
+  function drawFace(mood, lid) {
     // cheek
     ctx.fillStyle = 'rgba(255,150,170,0.75)';
     ctx.beginPath(); ctx.ellipse(4, 6, 4.5, 3, 0, 0, Math.PI * 2); ctx.fill();
@@ -1957,7 +2006,7 @@
       ctx.fillStyle = '#ffffff';
       ctx.beginPath(); ctx.arc(ex, ey, er, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       ctx.fillStyle = '#12141f'; ctx.beginPath(); ctx.arc(ex - 1, ey + 4, 3.6, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = skin.body; ctx.beginPath(); ctx.arc(ex, ey, er + 1, Math.PI * 1.02, Math.PI * 1.98); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = lid; ctx.beginPath(); ctx.arc(ex, ey, er + 1, Math.PI * 1.02, Math.PI * 1.98); ctx.closePath(); ctx.fill();
       ctx.beginPath(); ctx.moveTo(ex - er, ey); ctx.lineTo(ex + er, ey); ctx.stroke();
       ctx.fillStyle = '#7fd4ff'; ctx.beginPath(); ctx.moveTo(ex + 6, ey + 9); ctx.quadraticCurveTo(ex + 10, ey + 15, ex + 6, ey + 17); ctx.quadraticCurveTo(ex + 2, ey + 15, ex + 6, ey + 9); ctx.fill();
     } else {
@@ -2002,7 +2051,6 @@
       ctx.moveTo(-1, -22); ctx.quadraticCurveTo(3, -16, -1, -14); ctx.quadraticCurveTo(-5, -16, -1, -22);
       ctx.fill();
     }
-    ctx.restore();
   }
 
   function carMood() {
@@ -2020,8 +2068,12 @@
 
     ctx.save();
     ctx.translate(cx, GROUND_Y - WHEEL_R);
-    drawWheel(-len / 2 + 11, 0, s.x * PPM / WHEEL_R);
-    drawWheel(len / 2 - 11, 0, s.x * PPM / WHEEL_R);
+    const A = carArt();
+    if (A) for (const wx of A.wheels) drawWheel(wx, A.wy, s.x * PPM / A.r, A.r);
+    else {
+      drawWheel(-len / 2 + 11, 0, s.x * PPM / WHEEL_R, WHEEL_R);
+      drawWheel(len / 2 - 11, 0, s.x * PPM / WHEEL_R, WHEEL_R);
+    }
     ctx.rotate(s.tilt);
     if (s.state === 'stopped' && s.missed) {          // "no, no": a short head shake after a short stop
       const k = (performance.now() - s.endAt) / 700;
@@ -2687,7 +2739,13 @@
         ctx.beginPath(); ctx.arc(122, 142, 22, 0, Math.PI * 2); ctx.fill();
       }
     }
-    if (Z.bg) drawBackdrop(Z);
+    const bgArt = Z.bg === 'hills' && artReady('bg1') && ART_DATA.info ? ART.bg1 : null;
+    if (bgArt) {
+      // painted world: its sea line sits on the game's sea line, centred, covering the screen
+      const k = WATER_Y / (ART_DATA.info.bg_sea_top * bgArt.naturalHeight);
+      const bw = bgArt.naturalWidth * k, bh = bgArt.naturalHeight * k;
+      ctx.drawImage(bgArt, (W - bw) / 2, 0, bw, Math.max(bh, H));
+    } else if (Z.bg) drawBackdrop(Z);
     if (inArena(s.cliff) && !s.daily && !s.friend) drawBoss();
     if (s.spec.wind && !s.daily) drawWind(s.spec.wind, s.spec.fog && s.world === 2);
     if (Z !== lastZone) { lastZone = Z; setPageSky(Z); }
@@ -2779,7 +2837,7 @@
     }
 
     // sea drawn over the pieces so sinking parts look underwater
-    ctx.fillStyle = Z.sea;
+    ctx.fillStyle = bgArt ? 'rgba(70,184,216,0.9)' : Z.sea;     // the painted world's turquoise sea
     ctx.fillRect(-2000, WATER_Y, 6000, 3000);
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
     ctx.fillRect(-2000, WATER_Y, 6000, 3);
@@ -2997,6 +3055,7 @@
   }
   requestAnimationFrame(frame);
   window.__cliff = () => s;   // used only for automated testing
+  window.__art = () => ({ car: artReady('car'), wheel: artReady('wheel'), bg1: artReady('bg1'), carArt: !!carArt() });   // testing only
   window.__physics = Physics;   // used only for automated testing and tools/sim
   window.__shareVisible = () => shareVisible();
 })();

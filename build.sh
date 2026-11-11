@@ -15,6 +15,14 @@ TARGET="${1:-}"
 USAGE="use: crazygames-v3 | web-v3 | web | artifact-v3 <file> | artifact-web <file>"
 [ -z "$TARGET" ] && { echo "$USAGE"; exit 1; }
 
+# The game file with its images put in (design/art/art-data.js replaces the ART-DATA line).
+# Without that file the game keeps its original drawings.
+game() {
+  if [ -f design/art/art-data.js ]; then
+    awk 'FNR==NR { art = art $0 "\n"; next } /\/\/ ART-DATA:/ { printf "%s", art; next } { print }' design/art/art-data.js index.html
+  else cat index.html; fi
+}
+
 # Storage: CrazyGames build saves under cg3_, website build under w3_. V1 saves on players' phones are
 # never read, moved or deleted: website players start V3 fresh (owner's decision, 2026-11-05).
 CG_LINE="<script>window.CLIFF_BUILD = 'crazygames'; window.CLIFF_STORE_PREFIX = 'cg3_';</script>"
@@ -25,7 +33,7 @@ WEB_LINE="<script>window.CLIFF_STORE_PREFIX = 'w3_'; window.CLIFF_VERSION = 'v3'
 if [ "$TARGET" = "artifact-v3" ] || [ "$TARGET" = "artifact-web" ]; then
   [ -z "$2" ] && { echo "$USAGE"; exit 1; }
   if [ "$TARGET" = "artifact-v3" ]; then T="Cliff Edge Worlds"; L="$CG_LINE"; else T="Cliff Edge Web V3"; L="$WEB_LINE"; fi
-  { echo "<title>$T</title>"; echo "$L"; sed '1d' index.html | grep -v 'claude:viewport-fit-sides'; } > "$2"
+  { echo "<title>$T</title>"; echo "$L"; game | sed '1d' | grep -v 'claude:viewport-fit-sides'; } > "$2"
   echo "built $2"
   exit 0
 fi
@@ -61,7 +69,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 </head>
 <body>
 HEAD
-  cat index.html
+  game
   printf '\n</body>\n</html>\n'
   }
   exit 0
@@ -104,7 +112,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 HEAD
 echo "$WEB_LINE"
 printf '</head>\n<body>\n'
-cat index.html
+game
 printf '\n</body>\n</html>\n'
 } > "$OUT"
 [ "$TARGET" = "web" ] && touch docs/.nojekyll
