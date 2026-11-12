@@ -194,6 +194,34 @@ const ALLOWED = (() => { const sql = fs.readFileSync(path.join(ROOT, 'metrics/v3
       await ctx.close();
     }
 
+    // ---------- On a downhill road the car sits on the road (drawing only) ----------
+    // Records the canvas transform where the car is placed (drawCar: translate(car centre, GROUND_Y - WHEEL_R))
+    // and where the road top is drawn (fillRect at GROUND_Y, 14 px high), then checks that the point under
+    // the car's wheels lies on the road top line, and that the car is tilted like the road.
+    {
+      const { page, ctx, errors } = await openRun(); await quiet(ctx);
+      const pose = () => page.evaluate(() => {
+        const P = CanvasRenderingContext2D.prototype, s = window.__cliff(), rec = {};
+        const tr = P.translate, fr = P.fillRect;
+        P.translate = function (x, y) { tr.call(this, x, y); if (Math.abs(y - 612) < 1e-6 && Math.abs(x - (s.x * 30 + 24)) < 1e-6) rec.car = this.getTransform(); };
+        P.fillRect = function (x, y, w, h) { if (y === 620 && h === 14 && !rec.road) rec.road = this.getTransform(); return fr.call(this, x, y, w, h); };
+        window.__frame(16);
+        P.translate = tr; P.fillRect = fr;
+        if (!rec.car || !rec.road) return null;
+        const under = rec.car.transformPoint(new DOMPoint(0, 8));            // where the wheels touch the ground
+        const onRoad = rec.road.inverse().transformPoint(under);             // in road coordinates: road top is y = 620
+        return { k: s.crunR.k, slope: s.spec.slope, gapPx: onRoad.y - 620, carAng: Math.atan2(rec.car.b, rec.car.a), roadAng: Math.atan2(rec.road.b, rec.road.a), tilt: s.tilt };
+      });
+      const flat = await pose();
+      check('flat road: the car stands on the road (as before)', flat && Math.abs(flat.gapPx) < 0.5 && Math.abs(flat.carAng - flat.roadAng) < 1e-3, JSON.stringify(flat));
+      await page.evaluate(() => window.__skipTo(10));
+      const hill = await pose();
+      check('downhill boss cliff: the car sits on the tilted road, not inside it', hill && hill.slope > 0 && Math.abs(hill.gapPx) < 0.5, JSON.stringify(hill));
+      check('downhill: the car is tilted at the road angle', hill && Math.abs(hill.carAng - hill.roadAng) < 1e-3, JSON.stringify(hill));
+      check('no page errors (downhill)', errors.length === 0, errors.join(' | '));
+      await ctx.close();
+    }
+
     // ---------- Story mode still plays in the test build; no bonus buttons ----------
     {
       const { page, ctx, errors } = await openRun('?first=story'); await quiet(ctx);

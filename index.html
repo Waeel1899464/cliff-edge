@@ -3298,7 +3298,13 @@
       for (let x = edgePx() - 1.6 * PPM + 4; x < edgePx() - 6; x += 12) { ctx.beginPath(); ctx.roundRect(x, GROUND_Y - 6, 10, 7, 3); ctx.fill(); }
     }
     ctx.restore();                                   // (end of the moving ground)
-    if (!s.parts) drawCar();
+    if (!s.parts) {
+      // on a downhill road the car sits on the tilted road: same angle, same pivot (the edge) as the road above
+      ctx.save();
+      if (ang) { ctx.translate(EDGE_X, GROUND_Y); ctx.rotate(ang); ctx.translate(-EDGE_X, -GROUND_Y); }
+      drawCar();
+      ctx.restore();
+    }
     ctx.restore();
     if (s.spec.fog && s.world !== 2 && !s.parts) drawFog();
     if (s.parts) { if (s.rescue && s.rescue.state === 'anim') drawRescue(); else drawParts(); }
