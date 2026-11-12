@@ -66,6 +66,26 @@ const seed = (cur, extra = '') => IN_PAGE + HELP + SPY + `localStorage.setItem('
       await ctx.close();
     }
 
+    // ---------- the world map on a wide screen: big cards, readable, taps land on the right cliff ----------
+    {
+      const { page, ctx, errors } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(14), context: { viewport: { width: 821, height: 462 }, deviceScaleFactor: 1, hasTouch: false } });
+      const r = await page.evaluate(() => {
+        for (let i = 0; i < 30; i++) window.__frame(16);
+        const u = window.__ui(); window.__tap(u.map.x, u.map.y); for (let i = 0; i < 10; i++) window.__frame(16);
+        const P = CanvasRenderingContext2D.prototype, ft = P.fillText, sizes = [];
+        P.fillText = function (str, x, y) { const m = this.getTransform(); sizes.push([String(str), +(parseFloat(/(\d+(\.\d+)?)px/.exec(this.font)[1]) * Math.hypot(m.a, m.b)).toFixed(1)]); return ft.call(this, str, x, y); };
+        window.__frame(16); P.fillText = ft;
+        const nd = window.__mapNodes().find(n => n.n === 3);
+        window.__tap(nd.x, nd.y); for (let i = 0; i < 5; i++) window.__frame(16);
+        const replayed = window.__cliff().cliff;
+        return { small: sizes.filter(e => e[1] < 14), count: sizes.length, replayed };
+      });
+      check('821x462 map: every label on the map is at least 14 px', r.count > 40 && r.small.length === 0, r.small.length ? JSON.stringify(r.small.slice(0, 6)) : r.count + ' labels');
+      check('821x462 map: tapping cliff 1-3 on the big card replays cliff 3', r.replayed === 3, JSON.stringify(r.replayed));
+      check('no page errors (map)', errors.length === 0, errors.join(' | '));
+      await ctx.close();
+    }
+
     // ---------- upright phone: unchanged ----------
     {
       const { page, ctx } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(1), context: { viewport: { width: 390, height: 844 } } });
