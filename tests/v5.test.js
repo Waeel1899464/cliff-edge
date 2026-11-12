@@ -74,6 +74,31 @@ const seed = (cur, extra = '') => IN_PAGE + HELP + SPY + `localStorage.setItem('
       await ctx.close();
     }
 
+    // ---------- guards between versions ----------
+    {
+      // the physics code is exactly the one sent to CrazyGames (V3) and live on the website: any change
+      // to it must be deliberate (then update this test on purpose)
+      const blk = f => { const s = fs.readFileSync(path.join(__dirname, '..', f), 'utf8'); return s.slice(s.indexOf('/* PHYSICS-BEGIN'), s.indexOf('/* PHYSICS-END */')); };
+      const sub = blk('dist/crazygames-v3-submitted-2026-11-05.html'), now = blk('index.html');
+      check('physics code identical to the CrazyGames V3 submission (letter for letter)', sub.length > 20000 && sub === now, sub.length + ' / ' + now.length);
+      check('no randomness or clock reads inside the physics code', !/Math\.random|Date\.|performance\.now/.test(now));
+      // on a downhill road the car is drawn on the road, at the road's angle (wide and upright screens)
+      for (const vp of [{ width: 907, height: 510 }, { width: 390, height: 844 }]) {
+        const { page, ctx } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(10), context: { viewport: vp } });
+        const r = await page.evaluate(() => {
+          const P = CanvasRenderingContext2D.prototype, s = window.__cliff(), rec = {}, tr = P.translate, fr = P.fillRect;
+          P.translate = function (x, y) { tr.call(this, x, y); if (Math.abs(y - 612) < 1e-6 && Math.abs(x - (s.x * 30 + 24)) < 1e-6) rec.car = this.getTransform(); };
+          P.fillRect = function (x, y, w, h) { if (y === 620 && h === 14 && !rec.road) rec.road = this.getTransform(); return fr.call(this, x, y, w, h); };
+          window.__frame(16); P.translate = tr; P.fillRect = fr;
+          if (!rec.car || !rec.road) return null;
+          const under = rec.road.inverse().transformPoint(rec.car.transformPoint(new DOMPoint(0, 8)));
+          return { slope: s.spec.slope, gapPx: under.y - 620, angle: Math.atan2(rec.car.b, rec.car.a) - Math.atan2(rec.road.b, rec.road.a) };
+        });
+        check(`downhill boss cliff (${vp.width}x${vp.height}): the car sits on the tilted road, at its angle`, r && r.slope > 0 && Math.abs(r.gapPx) < 0.5 && Math.abs(r.angle) < 1e-3, JSON.stringify(r));
+        await ctx.close();
+      }
+    }
+
     // ---------- LAST RELEASE / LAST STOP: only after a miss ----------
     {
       const { page, ctx, errors } = await open(b, srv.url + PAGE, { manualClock: true, init: seed(3) });
