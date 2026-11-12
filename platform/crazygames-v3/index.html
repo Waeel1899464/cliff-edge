@@ -644,6 +644,10 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   // text and buttons stay in the 540-wide middle column. PAD = logical width added on each side.
   // Phones held upright are unchanged (PAD 0). Very wide windows keep side bands beyond 2.2:1.
   let PAD = 0;
+  // V5 wide screens (portal iframes such as 907x510): the game is drawn small (scale ~0.5), so
+  // MINF = the smallest text size that is still 14.5 real pixels, UI = how much buttons grow, and
+  // SIDE = how far the corner buttons move out into the side areas. All 0/1 on upright phones.
+  let MINF = 0, UI = 1, SIDE = 0;
   function resize() {
     const vw = document.body.clientWidth, vh = document.body.clientHeight;
     scale = Math.min(vw / W, vh / H);
@@ -652,6 +656,13 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       scale = vh / H;
       PAD = Math.max(0, Math.min((H * 2.2 - W) / 2, (vw / scale - W) / 2));
     }
+    MINF = PAD > 0 ? 14.5 / scale : 0;
+    UI = PAD > 0 ? Math.max(1, Math.min(1.6, 0.75 / scale)) : 1;
+    SIDE = PAD > 0 ? Math.max(0, Math.min(PAD - 12, 170)) : 0;
+    MUTE_X = W - 44 + SIDE;
+    DAILY_PILL.x = PAD > 0 ? MUTE_X - (34 + 66) * UI - 10 : W - 150;   // clear of the sound button's tap area
+    HEART_BTN.x = PAD > 0 ? W / 2 + 130 + 70 * UI : W / 2 + 112;
+    MAP_BTN.x = 24 - SIDE + 50 * UI; MAP_BTN.y = PAD > 0 ? 84 + Math.max(16, MINF / 2) + 20 * UI + 8 : 120;
     // Cap the drawing size at 1920 px tall (1080x1920 is TikTok's standard): sharp, but light.
     dpr = Math.min(window.devicePixelRatio || 1, 1920 / (H * scale));
     canvas.style.width = ((W + 2 * PAD) * scale) + 'px';
@@ -663,7 +674,6 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function baseTransform() { ctx.setTransform(scale * dpr, 0, 0, scale * dpr, PAD * scale * dpr, 0); }
   function fullRect() { ctx.fillRect(-PAD - 20, -20, W + 2 * PAD + 40, H + 40); }
   window.addEventListener('resize', resize);
-  resize();
 
   // ---------- Saved progress (optional, may be unavailable) ----------
   // Storage keys: the platform build saves under its own names (cg_ prefix), so the preview on the
@@ -729,6 +739,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   // states: ready -> holding -> sliding -> stopped | falling -> fell
   let s;
   const cam = { z: 1, fx: CAM_ANCHOR_X, fy: GROUND_Y };
+  const GROUND_SHIFT = 100;          // V5 wide screens: how much lower the road is drawn
   let particles = [];
   let shake = 0;
 
@@ -859,7 +870,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     { id: 'ball', name: 'CRYSTAL BALL' }, { id: 'slow', name: 'SLOW MOTION' }, { id: 'sandbag', name: 'SANDBAG' },
   ];
   function helperVisible() { return screen === 'game' && s.state === 'ready' && storyRound() && !s.helper && stuck.n === s.cliff && stuck.fails >= 2 && rewardLeft('helper') > 0; }
-  function helperBtn(i) { return { x: W / 2 + (i - 1) * 118, y: 392, w: 104, h: 74 }; }
+  function helperBtn(i) { return { x: W / 2 + (i - 1) * 118 * UI, y: 392, w: 104, h: 74, ui: true }; }
   function useHelper(id) {
     requestReward('helper', () => {
       s.helper = id;
@@ -873,7 +884,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     });
   }
   function rescueAllowed() { return storyRound() && !s.replay && rewardLeft('rescue') > 0; }
-  const RESCUE_BTN = { x: W / 2, y: 470, w: 250, h: 70 };
+  const RESCUE_BTN = { x: W / 2, y: 470, w: 250, h: 70, ui: true };
   function rescueBtnVisible() { return screen === 'game' && s.rescue && s.rescue.state === 'offer' && s.rescue.t0 !== null; }
   function acceptRescue() {
     requestReward('rescue', () => {
@@ -885,11 +896,11 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
   function declineRescue() { if (s.rescue && s.rescue.state === 'offer') { s.rescue.state = 'declined'; applyMiss(); } }
   // double coins after a good stop, one extra heart when only one is left, a mystery box after a boss
-  const DOUBLE_BTN = { x: W / 2, y: 452, w: 200, h: 44 };
+  const DOUBLE_BTN = { x: W / 2, y: 452, w: 200, h: 44, ui: true };
   function doubleVisible() { return screen === 'game' && s.state === 'stopped' && s.cleared && storyRound() && !s.doubled && s.coinsWon >= 5 && rewardLeft('double') > 0 && !boxVisible(); }
-  const HEART_BTN = { x: W / 2 + 112, y: 242, w: 84, h: 36 };
+  const HEART_BTN = { x: W / 2 + 112, y: 242, w: 84, h: 36, ui: true };
   function heartBtnVisible() { return screen === 'game' && s.state === 'ready' && storyRound() && !s.replay && hearts === 1 && !s.extraHeart && rewardLeft('heart') > 0; }
-  const BOX_BTN = { x: W / 2, y: 452, w: 220, h: 48 };
+  const BOX_BTN = { x: W / 2, y: 452, w: 220, h: 48, ui: true };
   function boxVisible() {
     if (!(screen === 'game' && s.state === 'stopped' && s.worldDone && !s.boxCoins && rewardLeft('box') > 0)) return false;
     const opened = loadJSON('cliff_boxes') || {};
@@ -984,7 +995,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 
   // ---------- Input: one press, one release ----------
   let activePointer = null;
-  const MUTE_X = W - 44, MUTE_Y = 50;
+  let MUTE_X = W - 44; const MUTE_Y = 50;
   // Mouse/trackpad devices get keyboard wording in the instructions.
   const FINE_POINTER = !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
   function press(e) {
@@ -995,7 +1006,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     Sound.init();
     const rect = canvas.getBoundingClientRect();
     const lx = (e.clientX - rect.left) / scale - PAD, ly = (e.clientY - rect.top) / scale;
-    if (Math.hypot(lx - MUTE_X, ly - MUTE_Y) < 34) { Sound.toggleMute(); return; }
+    if (Math.hypot(lx - MUTE_X, ly - MUTE_Y) < 34 * UI) { Sound.toggleMute(); return; }
     if (challengeVisible() && inBtn(CHALLENGE_BTN, lx, ly)) { pendingChallenge = true; return; }
     if (shareVisible() && inShareBtn(lx, ly)) { pendingShare = true; return; }
     if (screen === 'map') { mapTap(lx, ly); return; }
@@ -1481,8 +1492,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   let pendingShare = false;
   let shareShownFor = -1, shareShownAt = 0;
   let toast = { msg: '', until: 0 };
-  const SHARE_BTN = { x: W / 2, y: 702, w: 270, h: 56 };
-  const CHALLENGE_BTN = { x: W / 2, y: 784, w: 360, h: 70 };
+  const SHARE_BTN = { x: W / 2, y: 702, w: 270, h: 56, ui: true };
+  const CHALLENGE_BTN = { x: W / 2, y: 784, w: 360, h: 70, ui: true };
   let pendingChallenge = false;
   function challengeVisible() { return !IS_PORTAL && roundEnded(); }
   function shareVisible() {
@@ -1490,7 +1501,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     const ended = s.state === 'stopped' || s.state === 'fell' || (s.state === 'falling' && s.splashed);
     return ended && (!!Rec.clipFor(s.id) || Rec.recordingFor(s.id));
   }
-  function inBtn(b, lx, ly) { return Math.abs(lx - b.x) < b.w / 2 && Math.abs(ly - b.y) < b.h / 2; }
+  function inBtn(b, lx, ly) { const k = b.ui ? UI : 1; return Math.abs(lx - b.x) < b.w * k / 2 && Math.abs(ly - b.y) < b.h * k / 2; }
   function inShareBtn(lx, ly) { return inBtn(SHARE_BTN, lx, ly); }
   function roundEnded() { return s.state === 'stopped' || s.state === 'fell' || (s.state === 'falling' && s.splashed); }
 
@@ -1651,7 +1662,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
 
   // "All worlds completed!" card (web build only: the platform build has no external sharing)
-  const CARD_BTN = { x: W / 2, y: 610, w: 240, h: 52 };
+  const CARD_BTN = { x: W / 2, y: 610, w: 240, h: 52, ui: true };
   let pendingCard = false;
   function cardVisible() { return !IS_PORTAL && s.allDone && s.state === 'stopped'; }
   function shareCard() {
@@ -1744,7 +1755,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
 
   function rememberTry(stopped) {
-    lastTry = { key: s.layoutKey, release: s.releaseFront, stop: stopped ? frontX() : null };
+    lastTry = { key: s.layoutKey, release: s.releaseFront, stop: stopped ? frontX() : null, round: s, fell: !stopped };
   }
 
   // The first fall of a session plays in full; later ones are shorter (less slow motion, quicker
@@ -1973,8 +1984,11 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     const zFar = rearPx < 12 ? Math.max(0.36, (CAM_ANCHOR_X - 12) / (CAM_ANCHOR_X - rearPx)) : 1;
     // V4: frame the car and the edge together; the car grows on screen as it gets closer, and the
     // edge, the STOP sign and the target zone always stay in view. (Very long roads: as before.)
-    const fitL = rearPx - 1.2 * PPM, fitR = edgePx() + 1.4 * PPM;
-    const zFit = Math.min(1.7, (W - 24) / Math.max(1, fitR - fitL));
+    const fitL = rearPx - (PAD > 0 ? 0.8 : 1.2) * PPM, fitR = edgePx() + 1.4 * PPM;
+    // V5 wide screens: the world also uses the side area on the left (the edge stays where it was),
+    // so the car is drawn bigger; near the edge the zoom goes on until the car is ~115 real pixels.
+    const zFit = Math.min(PAD > 0 ? 3.4 : 1.7, (W - 24 + (PAD > 0 ? PAD - 12 : 0)) / Math.max(1, fitR - fitL));
+    const zNear = PAD > 0 ? Math.max(3, Math.min(4.6, 115 / (CAR_LEN * PPM * scale))) : 3;
     const zBase = zFit > zFar ? zFit : zFar, fBase = zFit > zFar ? fitR - (W - 12 - CAM_ANCHOR_X) / zFit : CAM_ANCHOR_X;
     let zt = zBase, ft = fBase, fyt = GROUND_Y;
     if (s.rescue && s.rescue.state === 'anim' && s.rescue.kind !== 'rewind') {
@@ -1988,10 +2002,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     } else if (s.state === 'sliding' || s.state === 'stopped') {
       const d = gapNow();
       const near = Math.max(0, Math.min(1, 1 - d / 3));
-      zt = zBase + (3 - zBase) * near * near;
+      zt = zBase + (Math.max(zBase, zNear) - zBase) * near * near;
       const focus = (frontX() * PPM + EDGE_X) / 2;
       ft = fBase + (focus - fBase) * near;
     }
+    // wide screens: the road sits lower on screen (GROUND_SHIFT px), leaving the top for the bigger text
+    if (PAD > 0 && !s.parts && fyt === GROUND_Y && !(s.rescue && s.rescue.state === 'anim')) fyt = GROUND_Y - (s.state === 'stopped' ? GROUND_SHIFT * 1.6 : GROUND_SHIFT) / zt;   // (result screen: room for its buttons)
     const ease = 1 - Math.exp(-rawDt * (s.parts ? 6 : 5));
     cam.z += (zt - cam.z) * ease;
     cam.fx += (ft - cam.fx) * ease;
@@ -2006,6 +2022,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function fmtTarget(cm) { return cm >= 100 ? (cm / 100) + ' m' : (cm >= 10 ? Math.round(cm) : cm.toFixed(1)) + ' cm'; }
 
   function text(str, x, y, size, color, weight = 800, align = 'center') {
+    if (size < MINF) size = MINF;
     ctx.font = `${weight} ${size}px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
     ctx.textAlign = align;
     ctx.textBaseline = 'middle';
@@ -2199,12 +2216,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     const k = Math.min(1, (performance.now() - shareShownAt) / 180);
     const pop = 0.85 + 0.15 * (1 - Math.pow(1 - k, 3)) + Math.sin(k * Math.PI) * 0.05;
     ctx.save();
-    ctx.translate(b.x, b.y); ctx.scale(pop, pop);
+    ctx.translate(b.x, b.y); ctx.scale(pop * UI, pop * UI);
     ctx.fillStyle = 'rgba(10,10,25,0.45)';
     ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2 + 5, b.w, b.h, b.h / 2); ctx.fill();
     ctx.fillStyle = fill;
     ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
-    ctx.font = `900 ${size}px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.font = `900 ${btnFont(size)}px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(label).width;
     const ix = -tw / 2 - 8;
@@ -2250,7 +2267,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
   // A pulsing press point at the bottom: where (and how) to play, without words to read.
   function drawHoldHint() {
-    const t = (performance.now() % 1400) / 1400, x = W / 2, y = 850;
+    const t = (performance.now() % 1400) / 1400, x = PAD > 0 ? Math.max(-PAD + 90, -170) : W / 2, y = 850;
     ctx.save();
     for (const d of [0, 0.5]) {
       const u = (t + d) % 1;
@@ -2274,7 +2291,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
 
   // "DAILY" pill on the home screen (top right, next to the sound button).
-  const DAILY_PILL = { x: W - 150, y: 50, w: 132, h: 42 };
+  const DAILY_PILL = { x: W - 150, y: 50, w: 132, h: 42, ui: true };
   function pillVisible() { return s.state === 'ready' && !s.friend; }
   function toggleDaily() {
     if (s.daily) { mode = 'run'; newRound(); return; }
@@ -2284,10 +2301,10 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function drawDailyPill() {
     const b = DAILY_PILL, streak = getStreak();
     ctx.save();
-    ctx.translate(b.x, b.y);
+    ctx.translate(b.x, b.y); ctx.scale(UI, UI);
     ctx.fillStyle = s.daily ? 'rgba(255,255,255,0.9)' : 'rgba(10,10,25,0.4)';
     ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
-    ctx.font = '900 17px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.font = `900 ${btnFont(17)}px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = s.daily ? '#12141f' : '#ffffff';
     const label = s.daily ? '✕ EXIT DAILY' : (streak > 0 ? `DAILY 🔥${streak}` : 'DAILY');
@@ -2300,33 +2317,110 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.restore();
   }
 
+  // V5 STOP sign on the edge, with a face: calm, then wide-eyed as the car comes close, eyes shut
+  // when it goes over; a close stop makes it sweat and wobble. Drawn at its foot (x, groundY).
+  function drawStopSign(x, gy) {
+    const now = performance.now(), gap = s.parts || s.state === 'falling' || s.state === 'fell' ? -1 : gapNow();
+    const fear = gap < 0 ? 1 : Math.max(0, Math.min(1, 1 - gap / 2.5));        // 0 far .. 1 at the edge
+    const relief = s.state === 'stopped' && s.result !== null && s.result < 30 ? Math.max(0, 1 - (now - s.endAt) / 1400) : 0;
+    const wob = (s.state === 'sliding' && gap < 0.6 ? Math.sin(now / 45) * 0.06 * (1 - gap / 0.6) : 0) + Math.sin(now / 70) * 0.08 * relief;
+    const sr = 15, poleH = 30, sy = gy - poleH - sr + 3;
+    ctx.save(); ctx.translate(x, gy); ctx.rotate(wob); ctx.translate(-x, -gy);
+    ctx.fillStyle = '#3a2a22'; ctx.fillRect(x - 2.5, gy - poleH, 5, poleH);                 // pole with outline
+    ctx.fillStyle = '#c9ccd6'; ctx.fillRect(x - 1.3, gy - poleH, 2.6, poleH);
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) { const a = Math.PI / 8 + i * Math.PI / 4; ctx.lineTo(x + Math.cos(a) * sr, sy + Math.sin(a) * sr); }
+    ctx.closePath();
+    ctx.fillStyle = '#e8243c'; ctx.fill();
+    ctx.lineWidth = 2.2; ctx.strokeStyle = '#3a0d14'; ctx.stroke();
+    ctx.beginPath();                                                                      // white inner rim
+    for (let i = 0; i < 8; i++) { const a = Math.PI / 8 + i * Math.PI / 4; ctx.lineTo(x + Math.cos(a) * (sr - 2.4), sy + Math.sin(a) * (sr - 2.4)); }
+    ctx.closePath(); ctx.lineWidth = 1.1; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+    ctx.font = '900 8.4px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff';
+    ctx.fillText('STOP', x, sy + 5.4);
+    // the face: two eyes above the word, looking at the car
+    const ey = sy - 4, er = 2.5 + 1.1 * fear;
+    if (gap < 0) {                                                                         // gone over: eyes squeezed shut
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.2; ctx.lineCap = 'round';
+      for (const dx of [-4, 4]) { ctx.beginPath(); ctx.moveTo(x + dx - 2, ey - 1.6); ctx.lineTo(x + dx + 2, ey); ctx.lineTo(x + dx - 2, ey + 1.6); ctx.stroke(); }
+    } else {
+      for (const dx of [-4, 4]) {
+        ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(x + dx, ey, er, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#12141f'; ctx.beginPath(); ctx.arc(x + dx - 0.9 - 0.5 * fear, ey + 0.3, 1.2, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    if (relief > 0 || fear > 0.75) {                                                       // a drop of sweat
+      ctx.fillStyle = '#9fe6ff';
+      ctx.beginPath(); ctx.moveTo(x + sr - 1, sy - sr + 2); ctx.quadraticCurveTo(x + sr + 2, sy - sr + 6, x + sr - 1, sy - sr + 7); ctx.quadraticCurveTo(x + sr - 4, sy - sr + 6, x + sr - 1, sy - sr + 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // V5 green flag at the start of the target zone: outlined pole, waving cloth (the way the wind
+  // blows), and a happy hop when the cliff is cleared.
+  function drawGoalFlag(x, gy, dir) {
+    const now = performance.now();
+    const hop = s.state === 'stopped' && s.cleared ? Math.abs(Math.sin(Math.min(1, (now - s.endAt) / 900) * Math.PI * 3)) * 6 * (1 - Math.min(1, (now - s.endAt) / 900)) : 0;
+    const top = gy - 30 - hop, t = now / 160;
+    ctx.save();
+    ctx.fillStyle = '#1f2a1c'; ctx.fillRect(x - 2, top, 4, gy - top);                                  // pole
+    ctx.fillStyle = '#e8eef0'; ctx.fillRect(x - 0.9, top, 1.8, gy - top);
+    ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.arc(x, top - 1, 2.6, 0, Math.PI * 2); ctx.fill();   // gold ball on top
+    ctx.strokeStyle = '#1f2a1c'; ctx.lineWidth = 1; ctx.stroke();
+    const L = 16 * dir, h = 11;
+    ctx.beginPath(); ctx.moveTo(x, top + 1);
+    ctx.bezierCurveTo(x + L * 0.35, top + 1 + Math.sin(t) * 2.2, x + L * 0.7, top + 1 - Math.sin(t) * 2.2, x + L, top + 2 + Math.sin(t + 1) * 1.5);
+    ctx.lineTo(x + L, top + 2 + h + Math.sin(t + 1) * 1.5);
+    ctx.bezierCurveTo(x + L * 0.7, top + 1 + h - Math.sin(t) * 2.2, x + L * 0.35, top + 1 + h + Math.sin(t) * 2.2, x, top + 1 + h);
+    ctx.closePath();
+    ctx.fillStyle = '#3ddc6e'; ctx.fill();
+    ctx.lineWidth = 1.6; ctx.strokeStyle = '#14451f'; ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(x + (dir > 0 ? 2 : -6), top + 3.5, 4, 2);    // shine
+    ctx.restore();
+  }
+
+  // A small wooden plank with a painted label (the ruler marks), in the game's outlined cartoon style.
+  function drawPlank(x, y, w, h, label, tilt) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(tilt || 0);
+    ctx.fillStyle = 'rgba(20,12,6,0.35)'; ctx.beginPath(); ctx.roundRect(-w / 2 + 1, -h / 2 + 2, w, h, 4); ctx.fill();   // shadow
+    ctx.fillStyle = '#d29a5c'; ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, 4); ctx.fill();
+    ctx.fillStyle = '#e9b97c'; ctx.fillRect(-w / 2 + 3, -h / 2 + 2, w - 6, 2.5);                                         // light edge
+    ctx.strokeStyle = '#a36b35'; ctx.lineWidth = 0.8;                                                                   // wood grain
+    ctx.beginPath(); ctx.moveTo(-w / 2 + 4, h / 2 - 4); ctx.lineTo(w / 2 - 9, h / 2 - 4); ctx.stroke();
+    ctx.strokeStyle = '#3b2414'; ctx.lineWidth = 1.8; ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, 4); ctx.stroke();
+    ctx.fillStyle = '#3b2414';                                                                                          // nails
+    for (const nx of [-w / 2 + 3.5, w / 2 - 3.5]) { ctx.beginPath(); ctx.arc(nx, -h / 2 + 3.5, 1.1, 0, Math.PI * 2); ctx.fill(); }
+    ctx.font = `900 ${h * 0.68}px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#3b2414'; ctx.fillText(label, 0, 1.5);
+    ctx.restore();
+  }
+
   // Ruler on the cliff top, plus the ghost of the previous try on this same cliff.
   function drawAssist() {
     const top = GROUND_Y;
     ctx.save();
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    // meter marks
+    // V5 meter marks: a small notch in the road and a wooden plank nailed to the cliff under it
     const ex = edgePx();
     for (let m = 1; m <= 5; m++) {
       const x = ex - m * PPM;
-      ctx.fillStyle = 'rgba(255,255,255,0.75)';
-      ctx.fillRect(x - 1, top, 2, 12);
-      ctx.font = '800 14px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      ctx.fillStyle = 'rgba(255,255,255,0.7)';
-      ctx.fillText(m + 'm', x, top + 26);
+      ctx.fillStyle = 'rgba(28,18,12,0.55)'; ctx.fillRect(x - 1, top + 6, 2, 8);    // notch in the road edge
+      drawPlank(x, top + 25, 28, 16, m + 'm', (m % 2 ? -1 : 1) * 0.04);
     }
-    // fine marks near the edge (readable when the camera zooms in)
+    // fine marks near the edge: little studs in the road, labelled when the camera is close
     [[0.5, '50'], [0.2, '20'], [0.1, '10']].forEach(([m, label]) => {
       const x = ex - m * PPM;
-      ctx.fillStyle = 'rgba(255,255,255,0.6)';
-      ctx.fillRect(x - 0.5, top, 1, 6);
+      ctx.fillStyle = '#fff3c4'; ctx.beginPath(); ctx.arc(x, top + 7, 1.6, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(28,18,12,0.7)'; ctx.lineWidth = 0.8; ctx.stroke();
       if (cam.z > 1.6) {
-        ctx.font = '800 5px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-        ctx.fillText(label, x, top + 11);
+        ctx.font = '900 6.5px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.fillStyle = '#fff3c4'; ctx.fillText(label, x, top + 13);
       }
     });
     // ghost of the previous try on this cliff
-    if (lastTry && lastTry.key === s.layoutKey && s.state !== 'stopped' && !s.parts) {
+    // V5: only after a miss (a fall, or a stop that did not clear): after a win there is nothing to copy
+    if (lastTry && lastTry.key === s.layoutKey && (lastTry.fell || lastTry.round.missed) && s.state !== 'stopped' && !s.parts) {
       if (lastTry.release !== null) {
         const x = lastTry.release * PPM;
         ctx.strokeStyle = 'rgba(255,210,63,0.95)'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
@@ -2350,7 +2444,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 
   function drawMuteIcon() {
     ctx.save();
-    ctx.translate(MUTE_X, MUTE_Y);
+    ctx.translate(MUTE_X, MUTE_Y); ctx.scale(UI, UI);
     ctx.fillStyle = 'rgba(10,10,25,0.35)';
     ctx.beginPath(); ctx.arc(0, 0, 22, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
@@ -2499,14 +2593,17 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     });
   }
 
+  function btnFont(size) { return Math.max(size, MINF / UI); }   // a label inside a button scaled by UI
   function drawPillBtn(b, label, fill, ink, size) {
+    if (b.ui || b.inUi) size = btnFont(size);
+    if (b.ui && UI !== 1) { ctx.save(); ctx.translate(b.x, b.y); ctx.scale(UI, UI); ctx.translate(-b.x, -b.y); drawPillBtn(Object.assign({}, b, { ui: false, inUi: true }), label, fill, ink, size); ctx.restore(); return; }
     ctx.fillStyle = 'rgba(10,10,25,0.45)'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2 + 4, b.w, b.h, b.h / 2); ctx.fill();
     ctx.fillStyle = fill; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
     ctx.font = `900 ${size}px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = ink; ctx.fillText(label, b.x, b.y + 1);
   }
   function drawNewBadge(x, y) {
-    ctx.save(); ctx.translate(x, y); ctx.rotate(0.18);
+    ctx.save(); ctx.translate(x, y); ctx.rotate(0.18); { const k = Math.max(UI, MINF / 13); ctx.scale(k, k); }
     ctx.fillStyle = '#ff3355'; ctx.beginPath(); ctx.roundRect(-24, -11, 48, 22, 11); ctx.fill();
     ctx.font = '900 13px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff'; ctx.fillText('NEW!', 0, 1);
@@ -2520,23 +2617,25 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.restore();
     // countdown ring
     ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 5; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.arc(b.x + b.w / 2 + 30, b.y, 18, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left); ctx.stroke();
-    text(`${rewardLeft('rescue')} left today`, b.x, b.y + 54, 15, 'rgba(255,255,255,0.75)', 800);
-    if (isNew('rescue')) drawNewBadge(b.x + b.w / 2 - 6, b.y - b.h / 2 - 2);
+    ctx.beginPath(); ctx.arc(b.x + b.w * UI / 2 + 30 * UI, b.y, 18 * UI, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left); ctx.stroke();
+    text(`${rewardLeft('rescue')} left today`, b.x, b.y + b.h * UI / 2 + Math.max(19, MINF * 0.7), 15, 'rgba(255,255,255,0.75)', 800);
+    if (isNew('rescue')) drawNewBadge(b.x + b.w * UI / 2 - 6, b.y - b.h * UI / 2 - 2);
   }
   function drawHelpers() {
-    text('STUCK? ONE HELPER FOR ONE TRY', W / 2, 340, 16, '#ffffff', 900);
-    text(`${rewardLeft('helper')} left today`, W / 2, 446, 13, 'rgba(255,255,255,0.75)', 800);
+    text('STUCK? ONE HELPER FOR ONE TRY', W / 2, 392 - 37 * UI - Math.max(16, MINF) * 0.8, 16, '#ffffff', 900);
+    text(`${rewardLeft('helper')} left today`, W / 2, 392 + 37 * UI + Math.max(13, MINF) * 0.7, 13, 'rgba(255,255,255,0.75)', 800);
     if (isNew('helper')) drawNewBadge(W / 2 + 160, 332);
     HELPERS.forEach((h, i) => {
       const b = helperBtn(i);
+      ctx.save(); ctx.translate(b.x, b.y); ctx.scale(UI, UI); ctx.translate(-b.x, -b.y);
       ctx.fillStyle = 'rgba(10,10,25,0.55)'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, 18); ctx.fill();
       ctx.save(); ctx.translate(b.x, b.y - 10);
       if (h.id === 'ball') { ctx.fillStyle = '#b48cff'; ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.beginPath(); ctx.arc(-5, -5, 4, 0, Math.PI * 2); ctx.fill(); }
       else if (h.id === 'slow') { ctx.fillStyle = '#7ed957'; ctx.beginPath(); ctx.ellipse(0, 2, 15, 10, 0, Math.PI, 0); ctx.fill(); ctx.fillRect(-15, 1, 30, 4); ctx.beginPath(); ctx.arc(17, -1, 5, 0, Math.PI * 2); ctx.fill(); }
       else { ctx.fillStyle = '#c7955a'; ctx.beginPath(); ctx.roundRect(-16, -2, 15, 12, 4); ctx.roundRect(1, -2, 15, 12, 4); ctx.roundRect(-8, -12, 15, 12, 4); ctx.fill(); }
       ctx.restore();
-      text(h.name, b.x, b.y + 22, 11, '#ffffff', 900);
+      text(h.name, b.x, b.y + 22, Math.max(11, MINF / UI), '#ffffff', 900);
+      ctx.restore();
     });
   }
   // Rescue animations (story mode, last heart): funny and short, then the same cliff again.
@@ -2728,14 +2827,15 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function cliffLabel(n) { const w = Math.floor((n - 1) / 10) + 1, k = (n - 1) % 10 + 1; return `CLIFF ${w}-${k}`; }
 
   // ---------- World map ----------
-  const MAP_BTN = { x: 74, y: 120, w: 100, h: 40 };
+  const MAP_BTN = { x: 74, y: 120, w: 100, h: 40, ui: true };
+  resize();   // (first layout: needs MUTE_X, DAILY_PILL and MAP_BTN above)
   function mapBtnVisible() { return screen === 'game' && s.state === 'ready' && !s.daily && !s.friend && ASSIST; }
   function drawMapBtn() {
     const b = MAP_BTN;
-    ctx.save(); ctx.translate(b.x, b.y);
+    ctx.save(); ctx.translate(b.x, b.y); ctx.scale(UI, UI);
     ctx.fillStyle = 'rgba(10,10,25,0.4)';
     ctx.beginPath(); ctx.roundRect(-b.w / 2, -b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
-    ctx.font = '900 17px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.font = `900 ${btnFont(17)}px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff';
     ctx.fillText('MAP', 8, 1);
     ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;   // small folded-map icon
@@ -2747,7 +2847,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     ctx.fillStyle = '#ffc531'; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = '#b8860b'; ctx.lineWidth = Math.max(1.5, r * 0.18); ctx.beginPath(); ctx.arc(x, y, r * 0.62, 0, Math.PI * 2); ctx.stroke();
   }
-  function drawCoinCount(x, y) { drawCoin(x + 9, y, 9); text(String(coins), x + 24, y + 1, 18, '#ffe27a', 900, 'left'); }
+  function drawCoinCount(x, y) { const r = Math.max(9, MINF * 0.4); drawCoin(x + r, y, r); text(String(coins), x + 2 * r + 6, y + 1, 18, '#ffe27a', 900, 'left'); }
   function starPath(cx, cy, r) {
     ctx.beginPath();
     for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * 0.45 : r; ctx.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr); }
@@ -2762,12 +2862,33 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     }
   }
   // layout: 5 world cards, 10 cliffs each; returns the cliff nodes for drawing and tapping
+  // V5 wide screens: a grid of 5 big cards (3 on top, 2 below; PLAY and GARAGE in the sixth place),
+  // each with 2 rows of 5 cliffs, so the numbers stay readable in a short, wide frame.
+  const MCARD = { w: 270, h: 200 };
+  function mapWide() { return PAD > 0; }
+  function mapGrid() {
+    const S = Math.min(1.85, (W + 2 * PAD - 60) / (3 * MCARD.w + 2 * 12), (H - 150) / (2 * MCARD.h + 12));
+    const cw = MCARD.w * S, ch = MCARD.h * S, x0 = W / 2 - (3 * cw + 2 * 12 * S) / 2, y0 = 120;
+    return { S, cw, ch, x0, y0, at: i => ({ x: x0 + (i % 3) * (cw + 12 * S), y: y0 + Math.floor(i / 3) * (ch + 12 * S) }) };
+  }
   function mapNodes() {
     const out = [];
+    if (mapWide()) {
+      const G = mapGrid();
+      for (let w = 0; w < 5; w++) { const c = G.at(w); for (let k = 0; k < 10; k++) out.push({ n: w * 10 + k + 1, w, k, S: G.S, x: c.x + (34 + (k % 5) * 50.5) * G.S, y: c.y + (78 + Math.floor(k / 5) * 66) * G.S }); }
+      return out;
+    }
     for (let w = 0; w < 5; w++) for (let k = 0; k < 10; k++) {
-      out.push({ n: w * 10 + k + 1, w, k, x: 52 + k * 48.4, y: 212 + w * 136 });
+      out.push({ n: w * 10 + k + 1, w, k, S: 1, x: 52 + k * 48.4, y: 212 + w * 136 });
     }
     return out;
+  }
+  function placeMapButtons() {
+    if (mapWide()) {
+      const G = mapGrid(), c = G.at(5);
+      Object.assign(MAP_PLAY, { x: c.x + G.cw / 2, y: c.y + G.ch * 0.36, ui: true });
+      Object.assign(MAP_SHOP, { x: c.x + G.cw / 2, y: c.y + G.ch * 0.78, ui: true });
+    } else { Object.assign(MAP_PLAY, { x: W / 2, y: 900, ui: false }); Object.assign(MAP_SHOP, { x: W - 70, y: 54, ui: false }); }
   }
   const MAP_PLAY = { x: W / 2, y: 900, w: 300, h: 70 };
   const MAP_SHOP = { x: W - 70, y: 54, w: 110, h: 40 };
@@ -2784,10 +2905,11 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   function endMapAnim() { mapAnim = null; closeMap(null); if (s.worldDone) newRound(); }
   function mapTap(lx, ly) {
     if (mapAnim) { endMapAnim(); return; }
+    placeMapButtons();
     if (inBtn(MAP_PLAY, lx, ly)) { closeMap(null); return; }
     if (SHOP_ENABLED && inBtn(MAP_SHOP, lx, ly)) { screen = 'garage'; return; }
     for (const nd of mapNodes()) {
-      if (Math.hypot(lx - nd.x, ly - nd.y) < 22 && nd.n <= Math.min(bestCliff, Physics.CLIFFS.length)) { closeMap(nd.n); return; }
+      if (Math.hypot(lx - nd.x, ly - nd.y) < 22 * nd.S && nd.n <= Math.min(bestCliff, Physics.CLIFFS.length)) { closeMap(nd.n); return; }
     }
   }
   function drawMap() {
@@ -2795,55 +2917,66 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     g.addColorStop(0, '#141629'); g.addColorStop(1, '#22163a');
     ctx.fillStyle = g; fullRect();
     let total = 0; for (const k in stars) total += stars[k];
-    text('WORLD MAP', 26, 54, 30, '#ffffff', 900, 'left');
-    starPath(40, 98, 11); ctx.fillStyle = '#ffd23f'; ctx.fill();
-    text(`${total} / 150`, 58, 99, 20, '#ffffff', 900, 'left');
-    drawCoinCount(170, 99);
+    placeMapButtons();
+    const wide = mapWide(), G = wide ? mapGrid() : null, hx = wide ? G.x0 : 26;
+    text('WORLD MAP', hx, 54, 30, '#ffffff', 900, 'left');
+    const sy2 = wide ? 54 : 98, sx2 = wide ? hx + Math.max(200, MINF * 7) : 40;
+    starPath(sx2, sy2, Math.max(11, MINF * 0.45)); ctx.fillStyle = '#ffd23f'; ctx.fill();
+    text(`${total} / 150`, sx2 + Math.max(18, MINF * 0.8), sy2 + 1, 20, '#ffffff', 900, 'left');
+    drawCoinCount(sx2 + (wide ? Math.max(130, MINF * 5) : 130), sy2 + 1);
     // the garage (cars for coins)
     const sb = MAP_SHOP;
+    if (sb.ui && UI !== 1) { ctx.save(); ctx.translate(sb.x, sb.y); ctx.scale(UI, UI); ctx.translate(-sb.x, -sb.y); }
     ctx.fillStyle = SHOP_ENABLED ? '#ffd23f' : 'rgba(255,255,255,0.08)'; ctx.beginPath(); ctx.roundRect(sb.x - sb.w / 2, sb.y - sb.h / 2, sb.w, sb.h, sb.h / 2); ctx.fill();
-    if (SHOP_ENABLED) { ctx.font = '900 17px "Lilita One", system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#12141f'; ctx.fillText('GARAGE', sb.x, sb.y + 1); }
+    if (SHOP_ENABLED) { ctx.font = `900 ${sb.ui ? btnFont(17) : 17}px "Lilita One", system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#12141f'; ctx.fillText('GARAGE', sb.x, sb.y + 1); }
     else text('SHOP · SOON', sb.x, sb.y + 1, 14, 'rgba(255,255,255,0.45)', 900);
+    if (sb.ui && UI !== 1) ctx.restore();
     const nodes = mapNodes();
     for (let w = 0; w < 5; w++) {
       const L = WORLD_LOOKS[w], y0 = 150 + w * 136;
+      if (wide) { ctx.save(); const c = G.at(w); ctx.translate(c.x, c.y); ctx.scale(G.S, G.S); }
+      const cx0 = wide ? 0 : 14, cy0 = wide ? 0 : y0, cw0 = wide ? MCARD.w : W - 28, ch0 = wide ? MCARD.h : 124;
       const unlocking = mapAnim && mapAnim.world === w + 1;
       const ak = unlocking ? Math.min(1, (performance.now() - mapAnim.t0) / MAP_ANIM_MS) : 1;
       const open = bestCliff >= w * 10 + 1 && (!unlocking || ak > 0.55);
-      const cg = ctx.createLinearGradient(0, y0, 0, y0 + 124);
+      const cg = ctx.createLinearGradient(0, cy0, 0, cy0 + ch0);
       cg.addColorStop(0, L.sky[0]); cg.addColorStop(1, L.sky[1]);
       ctx.save(); ctx.globalAlpha = open ? 1 : 0.35;
-      ctx.fillStyle = cg; ctx.beginPath(); ctx.roundRect(14, y0, W - 28, 124, 18); ctx.fill();
+      ctx.fillStyle = cg; ctx.beginPath(); ctx.roundRect(cx0, cy0, cw0, ch0, 18); ctx.fill();
       let ws = 0; for (let k = 1; k <= 10; k++) ws += stars[w * 10 + k] || 0;
-      text(`${w + 1}. ${Physics.WORLDS[w].name}`, 30, y0 + 22, 18, '#ffffff', 900, 'left');
-      text(open ? (unlocking ? 'UNLOCKED!' : `★ ${ws}/30`) : 'LOCKED', W - 30, y0 + 22, 16, open ? '#ffe27a' : '#ffffff', 900, 'right');
+      const mf = MINF; if (wide) MINF = mf / G.S;          // (inside the scaled card: same real size)
+      text(`${w + 1}. ${Physics.WORLDS[w].name}`, cx0 + 16, cy0 + 22, 18, '#ffffff', 900, 'left');
+      text(open ? (unlocking ? 'UNLOCKED!' : `★ ${ws}/30`) : 'LOCKED', cx0 + cw0 - 16, wide ? cy0 + 46 : cy0 + 22, 16, open ? '#ffe27a' : '#ffffff', 900, 'right');
+      MINF = mf;
       ctx.restore();
       if (unlocking && ak <= 0.55) {        // the lock shakes, then breaks
         const sh = Math.sin(performance.now() / 30) * 5 * (ak / 0.55);
-        ctx.save(); ctx.translate(W / 2 + sh, y0 + 66);
+        ctx.save(); ctx.translate(cx0 + cw0 / 2 + sh, cy0 + ch0 * 0.53);
         ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(0, -10, 13, Math.PI, 0); ctx.stroke();
         ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.roundRect(-20, -10, 40, 32, 6); ctx.fill();
         ctx.restore();
       } else if (unlocking && ak < 0.8) {
         const k2 = (ak - 0.55) / 0.25;
         ctx.save(); ctx.globalAlpha = 1 - k2; ctx.fillStyle = '#ffd23f';
-        ctx.beginPath(); ctx.roundRect(W / 2 - 20 - k2 * 30, y0 + 56 + k2 * 40, 18, 32, 6); ctx.roundRect(W / 2 + 2 + k2 * 30, y0 + 56 + k2 * 40, 18, 32, 6); ctx.fill();
+        ctx.beginPath(); ctx.roundRect(cx0 + cw0 / 2 - 20 - k2 * 30, cy0 + ch0 * 0.45 + k2 * 40, 18, 32, 6); ctx.roundRect(cx0 + cw0 / 2 + 2 + k2 * 30, cy0 + ch0 * 0.45 + k2 * 40, 18, 32, 6); ctx.fill();
         ctx.restore();
       }
+      if (wide) ctx.restore();
     }
     for (const nd of nodes) {
       const reached = nd.n <= bestCliff, here = nd.n === cliff, boss = nd.k === 9;
       ctx.save(); ctx.globalAlpha = reached ? 1 : 0.35;
       const arena = inArena(nd.n) && !boss;     // boss battle phases
       ctx.fillStyle = boss ? '#ff8a5c' : arena ? '#ffd2bd' : reached ? '#ffffff' : 'rgba(255,255,255,0.6)';
-      ctx.beginPath(); ctx.arc(nd.x, nd.y, boss ? 19 : 16, 0, Math.PI * 2); ctx.fill();
-      ctx.font = '900 14px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      const S = nd.S;
+      ctx.beginPath(); ctx.arc(nd.x, nd.y, (boss ? 19 : 16) * S, 0, Math.PI * 2); ctx.fill();
+      ctx.font = `900 ${Math.max(14 * S, MINF)}px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#12141f';
-      ctx.fillText(boss ? 'B' : String(nd.k + 1), nd.x, nd.y + 1);
+      ctx.fillText(boss ? 'B' : String(nd.k + 1), nd.x, nd.y + S);
       const st = stars[nd.n] || 0;
-      for (let i = 0; i < 3; i++) { starPath(nd.x + (i - 1) * 12, nd.y + 29, 5.5); ctx.fillStyle = i < st ? '#ffd23f' : 'rgba(10,10,25,0.45)'; ctx.fill(); }
+      for (let i = 0; i < 3; i++) { starPath(nd.x + (i - 1) * 12 * S, nd.y + 29 * S, 5.5 * S); ctx.fillStyle = i < st ? '#ffd23f' : 'rgba(10,10,25,0.45)'; ctx.fill(); }
       ctx.restore();
-      if (here && !mapAnim) { ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(nd.x, nd.y, 22, 0, Math.PI * 2); ctx.stroke(); }
+      if (here && !mapAnim) { ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 4 * S; ctx.beginPath(); ctx.arc(nd.x, nd.y, 22 * S, 0, Math.PI * 2); ctx.stroke(); }
     }
     if (mapAnim) {
       // the little car drives from the beaten boss to the first cliff of the new world
@@ -2851,21 +2984,24 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       const k = Math.min(1, (performance.now() - mapAnim.t0) / MAP_ANIM_MS), e = k < 0.15 ? 0 : Math.min(1, (k - 0.15) / 0.55);
       const ee = e * e * (3 - 2 * e);
       const x = a.x + (z.x - a.x) * ee, y = a.y + (z.y - a.y) * ee - Math.sin(ee * Math.PI) * 60 - 26;
-      ctx.save(); ctx.translate(x, y); ctx.scale(0.5, 0.5); drawBody(false, 'happy'); ctx.restore();
-      if (k > 0.7) { ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(z.x, z.y, 22 + Math.sin(performance.now() / 120) * 2, 0, Math.PI * 2); ctx.stroke(); }
-      text(`WORLD ${mapAnim.world} · ${Physics.WORLDS[mapAnim.world - 1].name}`, W / 2, 836, 22, '#ffd23f', 900);
+      ctx.save(); ctx.translate(x, y); ctx.scale(0.5 * a.S, 0.5 * a.S); drawBody(false, 'happy'); ctx.restore();
+      if (k > 0.7) { ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 4 * z.S; ctx.beginPath(); ctx.arc(z.x, z.y, (22 + Math.sin(performance.now() / 120) * 2) * z.S, 0, Math.PI * 2); ctx.stroke(); }
+      text(`WORLD ${mapAnim.world} · ${Physics.WORLDS[mapAnim.world - 1].name}`, W / 2, mapWide() ? H - 30 : 836, 22, '#ffd23f', 900);
       if (k >= 1) endMapAnim();
     }
     // PLAY: back to your story cliff
     const b = MAP_PLAY;
+    if (b.ui && UI !== 1) { ctx.save(); ctx.translate(b.x, b.y); ctx.scale(UI, UI); ctx.translate(-b.x, -b.y); }
     ctx.fillStyle = 'rgba(10,10,25,0.45)'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2 + 6, b.w, b.h, b.h / 2); ctx.fill();
     ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, b.h / 2); ctx.fill();
     ctx.font = '900 28px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#12141f';
     ctx.fillText(storyDone() ? 'PLAY ENDLESS' : 'PLAY ' + cliffLabel(cliff).replace('CLIFF ', ''), b.x, b.y + 1);
+    if (b.ui && UI !== 1) ctx.restore();
+    const ty = wide ? H - 30 : 836;
     if (mapAnim) { /* the travel title is drawn instead */ }
-    else if (storyDone()) text(`ENDLESS BEST ${endlessBest} · tap a cliff to replay it`, W / 2, 836, 16, '#7ef9ff', 800);
-    else text('Tap a cliff you reached to replay it for stars', W / 2, 836, 16, 'rgba(255,255,255,0.7)', 700);
+    else if (storyDone()) text(`ENDLESS BEST ${endlessBest} · tap a cliff to replay it`, W / 2, ty, 16, '#7ef9ff', 800);
+    else text('Tap a cliff you reached to replay it for stars', W / 2, ty, 16, 'rgba(255,255,255,0.7)', 700);
   }
 
   // ---- Garage (V4): six cars, bought with coins earned in the game. Looks only: every car drives
@@ -3025,17 +3161,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (s.spec.crumble.length) drawCracks(ePx);
     // STOP sign on the edge (always on the current edge): stop before it, or fall
     ctx.save(); ctx.translate(ePx - EDGE_X, 0);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(EDGE_X - 4, GROUND_Y - 30, 3, 30);
-    const sx = EDGE_X - 2.5, sy = GROUND_Y - 38, sr = 10;
-    ctx.beginPath();
-    for (let i = 0; i < 8; i++) { const a = Math.PI / 8 + i * Math.PI / 4; ctx.lineTo(sx + Math.cos(a) * sr, sy + Math.sin(a) * sr); }
-    ctx.closePath();
-    ctx.fillStyle = '#e8243c'; ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = '#ffffff'; ctx.stroke();
-    ctx.font = '900 6.5px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff';
-    ctx.fillText('STOP', sx, sy + 0.5);
+    drawStopSign(EDGE_X - 2.5, GROUND_Y);
     ctx.restore();
 
     // Ground type, written on the cliff face instead of the top of the screen.
@@ -3060,10 +3186,8 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       // the target zone: stop with the car's nose inside the green strip to clear the cliff
       const zx1 = edgePx(), zx0 = zx1 - Math.min(s.target, 100) / 100 * PPM;
       ctx.fillStyle = 'rgba(80,230,120,0.55)'; ctx.fillRect(zx0, GROUND_Y - 1, zx1 - zx0, 15);
-      ctx.fillStyle = '#5dff8a'; ctx.fillRect(zx0 - 1.5, GROUND_Y - 22, 3, 22);
       // the green flag also shows the wind: it points the way the wind blows
-      const fd = (s.spec.wind || 0) < 0 ? -1 : 1;
-      ctx.beginPath(); ctx.moveTo(zx0, GROUND_Y - 22); ctx.lineTo(zx0 + 11 * fd, GROUND_Y - 18); ctx.lineTo(zx0, GROUND_Y - 14); ctx.fill();
+      drawGoalFlag(zx0, GROUND_Y, (s.spec.wind || 0) < 0 ? -1 : 1);
     }
     if (ASSIST) drawAssist();
     if (s.helper === 'ball' && !s.parts && (s.state === 'ready' || s.state === 'holding')) {
@@ -3103,12 +3227,12 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 
     if (s.spec.fog && s.world === 2 && !s.daily) drawStormHaze();
     // HUD (screen space)
-    text(storyDone() ? 'ALL WORLDS ✓' : 'BEST ' + cliffLabel(bestCliff).replace('CLIFF ', ''), 26, 50, 22, '#ffffff', 800, 'left');
+    text(storyDone() ? 'ALL WORLDS ✓' : 'BEST ' + cliffLabel(bestCliff).replace('CLIFF ', ''), 26 - SIDE, 50, 22, '#ffffff', 800, 'left');
 
     drawMuteIcon();
     if (pillVisible()) drawDailyPill();
     if (mapBtnVisible()) drawMapBtn();
-    if (!s.daily && !s.friend) drawCoinCount(26, 84);
+    if (!s.daily && !s.friend) drawCoinCount(26 - SIDE, 50 + Math.max(34, MINF + 8));
 
     // Game link on the end screens; every recorded clip ends on one, so clips carry it. Web build only.
     if (!IS_PORTAL && roundEnded()) {
@@ -3144,7 +3268,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
           if (s.spec.crumble.length) tl.push('CRUMBLING EDGE');
           if (s.spec.quake) tl.push('EARTHQUAKE');
           const lines = tl.length > 2 ? [tl.slice(0, 2).join(' · '), tl.slice(2).join(' · ')] : tl;
-          lines.forEach((l, i) => text(l, W / 2, 280 + i * 26, 20, '#ffffff', 900));
+          lines.forEach((l, i) => text(l, W / 2, 280 + i * Math.max(26, MINF + 6), 20, '#ffffff', 900));
         }
       }
     } else if (s.daily) {
@@ -3214,7 +3338,7 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
       // shown before you drive (while driving, the distance counter takes this place)
       if (s.state === 'ready') {
         const lines = tl.length > 2 ? [tl.slice(0, 2).join(' · '), tl.slice(2).join(' · ')] : tl;
-        lines.forEach((l, i) => text(l, W / 2, 280 + i * 26, 20, '#ffffff', 900));
+        lines.forEach((l, i) => text(l, W / 2, 280 + i * Math.max(26, MINF + 6), 20, '#ffffff', 900));
       }
     }
 
@@ -3263,17 +3387,17 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
     if (helperVisible()) drawHelpers();
     if (doubleVisible()) {
       drawPillBtn(DOUBLE_BTN, 'DOUBLE COINS', '#ffd23f', '#12141f', 18);
-      text(`${rewardLeft('double')} left today`, DOUBLE_BTN.x, DOUBLE_BTN.y + 36, 13, 'rgba(255,255,255,0.75)', 800);
-      if (isNew('double')) drawNewBadge(DOUBLE_BTN.x + DOUBLE_BTN.w / 2 - 4, DOUBLE_BTN.y - DOUBLE_BTN.h / 2);
+      text(`${rewardLeft('double')} left today`, DOUBLE_BTN.x, DOUBLE_BTN.y + DOUBLE_BTN.h * UI / 2 + Math.max(14, MINF * 0.6), 13, 'rgba(255,255,255,0.75)', 800);
+      if (isNew('double')) drawNewBadge(DOUBLE_BTN.x + DOUBLE_BTN.w * UI / 2 - 4, DOUBLE_BTN.y - DOUBLE_BTN.h * UI / 2);
     }
     if (heartBtnVisible()) {
       drawPillBtn(HEART_BTN, '+1 ♥', '#ff4f7b', '#ffffff', 18);
-      text('1 a day', HEART_BTN.x, HEART_BTN.y + 30, 12, 'rgba(255,255,255,0.75)', 800);
-      if (isNew('heart')) drawNewBadge(HEART_BTN.x + HEART_BTN.w / 2 - 2, HEART_BTN.y - HEART_BTN.h / 2);
+      text('1 a day', HEART_BTN.x, HEART_BTN.y + HEART_BTN.h * UI / 2 + Math.max(12, MINF * 0.6), 12, 'rgba(255,255,255,0.75)', 800);
+      if (isNew('heart')) drawNewBadge(HEART_BTN.x + HEART_BTN.w * UI / 2 - 2, HEART_BTN.y - HEART_BTN.h * UI / 2);
     }
     if (boxVisible()) {
       drawPillBtn(BOX_BTN, 'OPEN MYSTERY BOX', '#7ef9ff', '#12141f', 18);
-      if (isNew('box')) drawNewBadge(BOX_BTN.x + BOX_BTN.w / 2 - 4, BOX_BTN.y - BOX_BTN.h / 2);
+      if (isNew('box')) drawNewBadge(BOX_BTN.x + BOX_BTN.w * UI / 2 - 4, BOX_BTN.y - BOX_BTN.h * UI / 2);
     }
     if (s.boxCoins) { drawCoin(W / 2 - 50, 452, 12); text('+' + s.boxCoins + ' FROM THE BOX', W / 2 - 32, 453, 20, '#7ef9ff', 900, 'left'); }
     if (s.heartWon) text('GOLDEN HEART! +1 ♥', W / 2, 512, 20, '#ffd23f', 900);
@@ -3311,6 +3435,9 @@ body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   }
   requestAnimationFrame(frame);
   window.__cliff = () => s;   // used only for automated testing
+  window.__mutePos = () => ({ x: MUTE_X, y: MUTE_Y });
+  window.__mapNodes = () => mapNodes();   // testing only
+  window.__ui = () => ({ MINF, UI, SIDE, PAD, scale, mute: { x: MUTE_X, y: MUTE_Y }, daily: Object.assign({}, DAILY_PILL), map: Object.assign({}, MAP_BTN), camZ: cam.z });   // testing only   // testing only (V5: on wide screens the sound button sits in the side area)
   window.__toClient = (lx, ly) => { const r = canvas.getBoundingClientRect(); return { x: r.left + (lx + PAD) * scale, y: r.top + ly * scale }; };   // testing only
   window.__garage = { open: () => { screen = 'garage'; }, state: () => ({ screen, skin: skin.id, owned: owned.slice(), coins }) };   // testing only
   window.__art = () => ({ car: artReady('car_pinky'), cars: SKINS.filter(k => carArt(k)).length, wheel: artReady('wheel'), bg1: artReady('bg1'), bg2: artReady('bg2'), rock1: artReady('rock1'), rock2: artReady('rock2'), all: Object.keys(ART).length > 0 && Object.keys(ART).every(artReady), count: Object.keys(ART).length, music: Sound.music(), musicTime: Sound.musicTime(), musicData: Object.keys(ART_DATA.music || {}).length, carArt: !!carArt(), world: (worldArt(zoneOf(s)) || {}).n || 0 });   // testing only
