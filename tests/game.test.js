@@ -217,7 +217,7 @@ const PLAY = `
       const box = await page.locator('canvas').boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.6); await page.mouse.down(); await page.waitForTimeout(2600); await page.mouse.up();
       await page.waitForTimeout(2500); await page.mouse.click(box.x + box.width / 2, box.y + box.height * 0.6); await page.waitForTimeout(300);
-      const mp = await page.evaluate(() => window.__toClient ? window.__toClient(540 - 44, 50) : null);   // the sound button (wide screens: middle column)
+      const mp = await page.evaluate(() => window.__toClient ? (window.__mutePos ? window.__toClient(window.__mutePos().x, window.__mutePos().y) : window.__toClient(540 - 44, 50)) : null);   // the sound button (V5 wide screens: moved into the side area)
       if (mp) await page.mouse.click(mp.x, mp.y); else { const sc = box.width / 540; await page.mouse.click(box.x + (540 - 44) * sc, box.y + 50 * sc); }
       await page.waitForTimeout(100);
       const after = await page.evaluate(() => Object.keys(localStorage).sort().map(k => [k, localStorage.getItem(k)]));
