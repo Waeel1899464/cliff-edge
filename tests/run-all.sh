@@ -2,9 +2,9 @@
 # Runs every V3 test, one after another, and prints one line per test file at the end.
 # Usage: sh tests/run-all.sh            (builds the pages first, then tests them)
 cd "$(dirname "$0")/.."
-./build.sh crazygames-v3 >/dev/null && ./build.sh web-v3 >/dev/null || exit 1
+./build.sh crazygames-v3 >/dev/null && ./build.sh web-v3 >/dev/null && ./build.sh test-run >/dev/null || exit 1
 FAIL=0; SUMMARY=""
-for t in precision game worlds v3 web-v3 art qa-full; do
+for t in precision game worlds v3 web-v3 art qa-full run; do
   OUT=$(node "tests/$t.test.js" 2>&1); CODE=$?
   LINE=$(printf '%s\n' "$OUT" | grep -E '^[0-9]+/[0-9]+ passed' | tail -1)
   [ -z "$LINE" ] && LINE="did not finish"

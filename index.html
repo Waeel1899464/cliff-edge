@@ -80,6 +80,10 @@
   // no friend-challenge links, no event tracking. Original features stay in the code.
   const BUILD = window.CLIFF_BUILD === 'crazygames' ? 'crazygames' : 'web';
   const IS_PORTAL = BUILD !== 'web';
+  // Cliff Run test build (build.sh test-run): both modes, neutral names MODE A / MODE B, which one opens
+  // first set by the link (?first=run or ?first=story), no bonus buttons, anonymous test analytics.
+  const TEST = window.CLIFF_TEST === true;
+  const TEST_FIRST = /[?&]first=story/.test(location.search) ? 'story' : 'run';
 
   // ---------- Setup ----------
   const W = 540, H = 960;            // logical size (9:16)
@@ -699,6 +703,58 @@
   // Endless (unlocked after cliff 50): new cliffs every run; the score is the number of cliffs
   // cleared in a row (any miss or fall ends the run). No rescues, helpers or rewards here.
   let endless = null;         // { seed, i, score }
+
+  // ---------- Cliff Run v0 (experiment): one long run, no result screens, one fall ends it ----------
+  // Kept apart from the story: its own sequence, targets, score and best; the story's cliffs, hearts,
+  // stars and grades are never read or changed by it. Physics is the same (Physics.*).
+  // Sequence: per world, 3 groups of 3 cliffs (learn, vary, test) built on one story cliff of that
+  // world each, then that world's boss cliff. 5 worlds x 10 = 50 cliffs; then generated cliffs.
+  const CRUN = (() => {
+    const BASES = { 1: [2, 5, 7], 2: [11, 14, 17], 3: [21, 24, 22], 4: [31, 33, 34], 5: [41, 44, 46] };
+    const FIRST = [150, 130, 115];                  // the first three cliffs: very wide zones (cm)
+    const BONUS = [0, 0.35, 0.32, 0.28, 0.24, 0.21];  // bonus zone for x1..x5, as a share of the target
+    const shift = (sp, d) => Object.assign({}, sp, { dist: sp.dist + d,
+      patches: sp.patches.map(q => ({ at: q.at + d, si: q.si })), crumble: sp.crumble.map(c => ({ at: c.at + d, len: c.len })) });
+    const r2 = v => Math.round(v * 1000) / 1000;
+    const list = [];
+    for (let w = 1; w <= 5; w++) {
+      BASES[w].forEach((n, g) => {
+        const base = Physics.spec(Object.assign({}, Physics.cliffSpec(n), { fog: 0 }));   // no fog in the run
+        for (let pos = 0; pos < 3; pos++) {
+          let sp;
+          if (pos === 0) sp = Object.assign(shift(base, -1), { vmax: base.vmax - 0.3, wind: base.wind * 0.7, slope: base.slope * 0.7 });
+          else if (pos === 1) sp = shift(base, 1.5);
+          else sp = Object.assign(shift(base, 0.5), { vmax: base.vmax + 0.3, wind: base.wind * 1.15, slope: base.slope * 1.15 });
+          if (sp.dist < 8) sp = shift(sp, 8 - sp.dist);
+          sp = Physics.spec(Object.assign(sp, { dist: r2(sp.dist), vmax: r2(sp.vmax), wind: r2(sp.wind), slope: r2(sp.slope) }));
+          // ref: the story cliff used for the look (a non-boss cliff of the same world, so no boss shows up)
+          list.push({ k: list.length + 1, world: w, group: (w - 1) * 3 + g, role: ['learn', 'vary', 'test'][pos], base: n, ref: (w - 1) * 10 + 1, boss: false, sp });
+        }
+      });
+      const bn = w * 10;                            // the boss cliff: the story boss's final phase
+      list.push({ k: list.length + 1, world: w, group: -w, role: 'boss', base: bn, ref: bn, boss: true,
+        sp: Physics.spec(Object.assign({}, Physics.cliffSpec(bn), { fog: 0 })) });
+    }
+    const targets = {};
+    function goal(R) { return 0.97 - 0.09 * (R.k - 1) / 49 + (R.role === 'learn' || R.boss ? 0.02 : R.role === 'test' ? -0.03 : 0); }
+    function at(k, seed) {
+      if (k <= list.length) {
+        const R = list[k - 1];
+        if (!(k in targets)) targets[k] = k <= 3 ? FIRST[k - 1] : Physics.targetS(Math.min(0.995, goal(R)), R.sp);
+        return Object.assign({ target: targets[k] }, R);
+      }
+      const i = 10 + (k - list.length - 1), sp = Physics.endlessSpec(seed, i);   // after cliff 50: generated
+      return { k, world: 0, group: 1000 + k, role: 'endless', base: 0, ref: 0, boss: false, sp, target: Physics.endlessTarget(i, sp) };
+    }
+    return { list, at, BONUS, bonusFrac: m => BONUS[Math.max(1, Math.min(5, m))] };
+  })();
+  const CRUN_CELEB = 450;                           // ms the stop result shows before the next cliff
+  const CRUN_TR = (() => { const m = /[?&]tr=(\d+)/.exec(location.search); return m ? Math.max(150, Math.min(1000, +m[1])) : 400; })();   // transition ms
+  let crun = null;                                  // { k, score, mult, strikes, seed }
+  let crunBest = clampInt(load('cliff_crun_best', 0), 0, 1e7);
+  let crunRuns = 0;                                 // runs started this session (the LET GO hint is for the first)
+  let crunBuf = false;                              // a press made during a transition (starts the drive when it ends)
+  const newCrun = () => { crunRuns++; return { k: 1, score: 0, mult: 1, strikes: 0, seed: Math.random().toString(36).slice(2, 10) }; };
   let endlessBest = clampInt(load('cliff_endless_best', 0), 0, 1e6);
   const newRun = () => ({ seed: Math.random().toString(36).slice(2, 10), i: 0, score: 0 });
   const storyDone = () => bestCliff > Physics.CLIFFS.length;
@@ -791,11 +847,12 @@
   const Track = (() => {
     const URL_ = 'https://twgbgjwweanifxngkzrd.supabase.co/rest/v1/events';
     const KEY = 'sb_publishable_fRMxd1l7QJ0Rj5Tvysw1jg_I60GWXjT';
-    const on = !IS_PORTAL && (location.hostname === 'waeel1899464.github.io' || /[?&]track=1/.test(location.search));
+    const on = !IS_PORTAL && (TEST || location.hostname === 'waeel1899464.github.io' || /[?&]track=1/.test(location.search));
     const rid = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
     // A version build (window.CLIFF_VERSION, e.g. 'v3') marks its ids 'v3-…' so its players can be
     // counted apart from the older versions in the same table.
-    const VER = typeof window.CLIFF_VERSION === 'string' && /^v[0-9]{1,2}$/.test(window.CLIFF_VERSION) ? window.CLIFF_VERSION + '-' : '';
+    // (test build: 'ra' = Cliff Run opened first, 'sa' = Story opened first; the website uses 'v3')
+    const VER = typeof window.CLIFF_VERSION === 'string' && /^(v[0-9]{1,2}|ra|sa)$/.test(window.CLIFF_VERSION) ? window.CLIFF_VERSION + '-' : '';
     let device = null;
     try { device = localStorage.getItem(storeKey('cliff_dev')); if (!device) { device = VER + rid(); localStorage.setItem(storeKey('cliff_dev'), device); } } catch (e) {}
     if (!device) device = VER + rid();
@@ -841,7 +898,7 @@
   const HELPERS = [
     { id: 'ball', name: 'CRYSTAL BALL' }, { id: 'slow', name: 'SLOW MOTION' }, { id: 'sandbag', name: 'SANDBAG' },
   ];
-  function helperVisible() { return screen === 'game' && s.state === 'ready' && storyRound() && !s.helper && stuck.n === s.cliff && stuck.fails >= 2 && rewardLeft('helper') > 0; }
+  function helperVisible() { return !TEST && screen === 'game' && s.state === 'ready' && storyRound() && !s.helper && stuck.n === s.cliff && stuck.fails >= 2 && rewardLeft('helper') > 0; }
   function helperBtn(i) { return { x: W / 2 + (i - 1) * 118, y: 392, w: 104, h: 74 }; }
   function useHelper(id) {
     requestReward('helper', () => {
@@ -855,7 +912,7 @@
       Sound.ding();
     });
   }
-  function rescueAllowed() { return storyRound() && !s.replay && rewardLeft('rescue') > 0; }
+  function rescueAllowed() { return !TEST && storyRound() && !s.replay && rewardLeft('rescue') > 0; }
   const RESCUE_BTN = { x: W / 2, y: 470, w: 250, h: 70 };
   function rescueBtnVisible() { return screen === 'game' && s.rescue && s.rescue.state === 'offer' && s.rescue.t0 !== null; }
   function acceptRescue() {
@@ -869,11 +926,12 @@
   function declineRescue() { if (s.rescue && s.rescue.state === 'offer') { s.rescue.state = 'declined'; applyMiss(); } }
   // double coins after a good stop, one extra heart when only one is left, a mystery box after a boss
   const DOUBLE_BTN = { x: W / 2, y: 452, w: 200, h: 44 };
-  function doubleVisible() { return screen === 'game' && s.state === 'stopped' && s.cleared && storyRound() && !s.doubled && s.coinsWon >= 5 && rewardLeft('double') > 0 && !boxVisible(); }
+  function doubleVisible() { return !TEST && screen === 'game' && s.state === 'stopped' && s.cleared && storyRound() && !s.doubled && s.coinsWon >= 5 && rewardLeft('double') > 0 && !boxVisible(); }
   const HEART_BTN = { x: W / 2 + 112, y: 242, w: 84, h: 36 };
-  function heartBtnVisible() { return screen === 'game' && s.state === 'ready' && storyRound() && !s.replay && hearts === 1 && !s.extraHeart && rewardLeft('heart') > 0; }
+  function heartBtnVisible() { return !TEST && screen === 'game' && s.state === 'ready' && storyRound() && !s.replay && hearts === 1 && !s.extraHeart && rewardLeft('heart') > 0; }
   const BOX_BTN = { x: W / 2, y: 452, w: 220, h: 48 };
   function boxVisible() {
+    if (TEST) return false;
     if (!(screen === 'game' && s.state === 'stopped' && s.worldDone && !s.boxCoins && rewardLeft('box') > 0)) return false;
     const opened = loadJSON('cliff_boxes') || {};
     return !opened[s.world];
@@ -907,8 +965,11 @@
     let si = Math.floor(Math.random() * 3);   // the three V2 grounds
     let dist = Math.round((8 + Math.random() * 5) * 1000) / 1000;   // meters from car front to edge
     let vmax = Math.round((6 + Math.random() * 3) * 1000) / 1000;
-    let fr = null, daily = false, sp = null;
-    if (friend && !friend.won && friend.tries < FRIEND_TRIES) {
+    let fr = null, daily = false, sp = null, crunR = null;
+    if (mode === 'cliffrun') {
+      if (!crun) crun = newCrun();
+      crunR = CRUN.at(crun.k, crun.seed); sp = crunR.sp; ({ si, dist, vmax } = sp);
+    } else if (friend && !friend.won && friend.tries < FRIEND_TRIES) {
       friend.tries++;
       fr = friend; si = fr.si; dist = fr.dist; vmax = fr.vmax;
       if (fr.n) sp = Physics.cliffSpec(fr.n); else if (fr.e) sp = Physics.endlessSpec(fr.e.seed, fr.e.i);
@@ -927,7 +988,7 @@
     }
     if (!sp) sp = Physics.spec({ si, dist, vmax });                               // plain cliff, no twists
     const surface = SURFACES[si];
-    const layoutKey = fr ? 'friend' : daily ? 'daily-' + dayKey() : 'cliff-' + (replay || cliff) + (ASSIST ? '' : '-' + roundCounter);
+    const layoutKey = crunR ? 'crun-' + crunR.group : fr ? 'friend' : daily ? 'daily-' + dayKey() : 'cliff-' + (replay || cliff) + (ASSIST ? '' : '-' + roundCounter);
     s = {
       id: ++roundCounter,
       state: 'ready',
@@ -935,10 +996,10 @@
       params: { si, dist, vmax },
       friend: fr, friendTry: fr ? fr.tries : 0, friendWin: false,
       daily, dailyDay: daily ? dayKey() : null, dailyTry: 0, newDailyBest: false, layoutKey, releaseFront: null,
-      cliff: mode === 'endless' && !daily && !fr ? 1000 + endless.i : replay || cliff, replay: !!replay,
+      cliff: crunR ? crunR.ref : mode === 'endless' && !daily && !fr ? 1000 + endless.i : replay || cliff, replay: !!replay && !crunR,
       endless: mode === 'endless' && !daily && !fr, runOver: false,
-      target: fr && fr.n ? storyTargetCached(fr.n, sp) : fr && fr.e ? Physics.endlessTarget(fr.e.i, sp) : mode === 'endless' && !daily && !fr ? Physics.endlessTarget(endless.i, sp) : storyTargetCached(replay || cliff, sp), grade: null, stars: 0, newStars: false, coinsWon: 0, spec: sp, plan: null, surfNow: surface,
-      world: fr && fr.n ? Physics.worldOf(fr.n) : fr && fr.e ? endlessLook(sp) : mode === 'endless' && !daily && !fr ? endlessLook(sp) : Physics.worldOf(replay || cliff), worldDone: false, cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
+      target: crunR ? crunR.target : fr && fr.n ? storyTargetCached(fr.n, sp) : fr && fr.e ? Physics.endlessTarget(fr.e.i, sp) : mode === 'endless' && !daily && !fr ? Physics.endlessTarget(endless.i, sp) : storyTargetCached(replay || cliff, sp), grade: null, stars: 0, newStars: false, coinsWon: 0, spec: sp, plan: null, surfNow: surface,
+      world: crunR ? (crunR.world || endlessLook(sp)) : fr && fr.n ? Physics.worldOf(fr.n) : fr && fr.e ? endlessLook(sp) : mode === 'endless' && !daily && !fr ? endlessLook(sp) : Physics.worldOf(replay || cliff), worldDone: false, cleared: false, missed: false, heartsLeft: hearts, backTo: 0, newCp: false, newBestCliff: false,
       vmax,
       x: EDGE_X / PPM - dist - CAR_LEN,               // car rear, meters
       x0: EDGE_X / PPM - dist - CAR_LEN, dist,
@@ -951,6 +1012,7 @@
       result: null, newBest: false, beat: false,
       endAt: 0,
       parts: null, fallT: 0, splashed: false, fallMsg: '',
+      crun: !!crunR, crunR,
     };
     particles = [];
     // a boss battle starts (arriving at phase 1, or sent back to it): short intro
@@ -962,6 +1024,7 @@
   let titleGone = false;      // V4: the game title shows until the first press of the session
   const worldIntroShown = {};   // the new-world card shows once per session per world
   const WORLD_NEW = { 2: 'NEW: WIND & SAND', 3: 'NEW: ICE PATCHES & FOG', 4: 'NEW: LOW GRAVITY', 5: 'NEW: CRUMBLING EDGE & QUAKES' };
+  if (TEST && TEST_FIRST === 'run') mode = 'cliffrun';   // test link: which mode opens first
   newRound();
   Track.send(friend ? 'challenge_open' : 'open', roundsPlayed);
 
@@ -979,6 +1042,7 @@
     const rect = canvas.getBoundingClientRect();
     const lx = (e.clientX - rect.left) / scale - PAD, ly = (e.clientY - rect.top) / scale;
     if (Math.hypot(lx - MUTE_X, ly - MUTE_Y) < 34) { Sound.toggleMute(); return; }
+    if (TEST && screen === 'game' && testModeBtnVisible() && inBtn(TEST_BTN, lx, ly)) { switchTestMode(); return; }
     if (challengeVisible() && inBtn(CHALLENGE_BTN, lx, ly)) { pendingChallenge = true; return; }
     if (shareVisible() && inShareBtn(lx, ly)) { pendingShare = true; return; }
     if (screen === 'map') { mapTap(lx, ly); return; }
@@ -1006,6 +1070,11 @@
     const now = performance.now();
     if (screen === 'map') { if (mapAnim) endMapAnim(); else closeMap(null); return; }   // keyboard on the map = PLAY
     if (screen === 'garage') { screen = 'map'; return; }                                  // keyboard in the garage = back
+    if (s.crun && crunBusy(now)) {                 // result showing or the ground still moving:
+      if (s.crunOver) { if (now - s.endAt > 600) { crun = newCrun(); newRound(); } return; }   // run over: tap = new run
+      activePointer = id === undefined ? 'key' : id; crunBuf = true;                          // remember the press, once
+      return;
+    }
     if (s.state === 'ready') {
       // A daily screen opened before midnight (UTC) shows yesterday's cliff: switch to today's
       // cliff first, without using a try. The player presses again to play it.
@@ -1022,7 +1091,8 @@
       s.tPress = t === undefined ? now : t;
       s.crossAt = s.tPress + realOf(Physics.holdTimeForS(Physics.edgeAt(s.spec, Infinity), s.spec)) * 1000;   // still holding then = over the edge
       roundsPlayed++; save('cliff_rounds', roundsPlayed);
-      if (s.endless) Track.send('endless_round', endless.i); else Track.send(s.daily ? 'daily' : 'round', s.daily ? s.dailyTry : s.cliff);
+      if (s.crun) { /* the run reports each cleared cliff (crunStop) */ }
+      else if (s.endless) Track.send('endless_round', endless.i); else Track.send(s.daily ? 'daily' : 'round', s.daily ? s.dailyTry : s.cliff);
       Rec.start(s.id);
       return;
     }
@@ -1048,6 +1118,7 @@
     if (pendingCard) { pendingCard = false; shareCard(); return; }
     if (activePointer !== null && e.pointerId !== activePointer) return;
     activePointer = null;
+    crunBuf = false;                                 // a press made during a transition was let go: no drive
     if (s.state === 'holding') releaseAt(evT(e));
   }
   // Let go at time t (ms): position and speed at that exact moment decide the whole outcome.
@@ -1360,7 +1431,7 @@
     }
     // Platform build: clips are off (sharing and downloads are usually blocked inside platform iframes),
     // so nothing here ever runs there.
-    function supported() { return !IS_PORTAL && !!(window.MediaRecorder && HTMLCanvasElement.prototype.captureStream); }
+    function supported() { return !IS_PORTAL && !TEST && !!(window.MediaRecorder && HTMLCanvasElement.prototype.captureStream); }
     // MP4 plays everywhere (WhatsApp, Messenger, TikTok). Some browsers claim MP4 but write a file
     // with no picture, so MP4 is used only after a half-second test recording proves it has video.
     // Until then (or if the test fails) WebM is used.
@@ -1467,8 +1538,9 @@
   const SHARE_BTN = { x: W / 2, y: 702, w: 270, h: 56 };
   const CHALLENGE_BTN = { x: W / 2, y: 784, w: 360, h: 70 };
   let pendingChallenge = false;
-  function challengeVisible() { return !IS_PORTAL && roundEnded(); }
+  function challengeVisible() { return !IS_PORTAL && !TEST && roundEnded(); }
   function shareVisible() {
+    if (TEST) return false;
     if (IS_PORTAL) return false;
     const ended = s.state === 'stopped' || s.state === 'fell' || (s.state === 'falling' && s.splashed);
     return ended && (!!Rec.clipFor(s.id) || Rec.recordingFor(s.id));
@@ -1636,7 +1708,7 @@
   // "All worlds completed!" card (web build only: the platform build has no external sharing)
   const CARD_BTN = { x: W / 2, y: 610, w: 240, h: 52 };
   let pendingCard = false;
-  function cardVisible() { return !IS_PORTAL && s.allDone && s.state === 'stopped'; }
+  function cardVisible() { return !IS_PORTAL && !TEST && s.allDone && s.state === 'stopped'; }
   function shareCard() {
     let total = 0; for (const k in stars) total += stars[k];
     const c = document.createElement('canvas'); c.width = 1080; c.height = 1080;
@@ -1715,6 +1787,47 @@
     if (hearts <= 1 && rescueAllowed()) { s.rescue = { state: 'offer', t0: performance.now() }; s.heartsLeft = 0; return; }   // shown at once
     applyMiss();
   }
+  // Cliff Run: a stop inside the zone scores 0..100 by closeness, times the multiplier (x2 on a boss
+  // cliff). Inside the bonus zone (share of the target for the current multiplier) the multiplier
+  // goes up by one (max x5); any other clear sets it back to x1. A stop short of the zone is a
+  // strike (no points, x1); the third strike or a fall ends the run.
+  function crunStop() {
+    const T = s.target, cm = s.result;
+    s.crunMult = crun.mult; s.crunFrac = CRUN.bonusFrac(crun.mult);
+    if (cm < T) {
+      s.cleared = true; s.grade = Physics.grade(cm, T);
+      const pts = Math.round(100 * (1 - cm / T)) * crun.mult * (s.crunR.boss ? 2 : 1);
+      crun.score += pts; s.crunPts = pts;
+      s.crunBonus = cm < s.crunFrac * T;
+      crun.mult = s.crunBonus ? Math.min(5, crun.mult + 1) : 1;
+      if (s.grade === 'PERFECT') { s.flashAt = performance.now(); cam.z *= 1.15; shake = Math.max(shake, 4); puff(frontX() * PPM, GROUND_Y - 30, 26, '#ffffff', 220, 420, 4, 1.0); }
+      puff(EDGE_X - 30, GROUND_Y - 40, s.crunBonus ? 30 : 16, s.crunBonus ? '#ffd23f' : '#ffffff', 160, 380, 5, 1.1);
+      Track.send('endless_round', crun.k);          // a cleared run cliff (value: its number in the run)
+      crun.k++;
+    } else {
+      s.missed = true; s.crunStrike = true; crun.mult = 1; crun.strikes++;
+      if (crun.strikes > 2) crunOver(2); else crun.k++;
+    }
+  }
+  function crunOver(reason) {                       // 1 = fell, 2 = third strike
+    if (s.crunOver) return;
+    s.crunOver = true; s.crunReason = reason; s.crunScore = crun.score; s.crunCliffs = crun.k - 1;
+    if (crun.score > crunBest) { crunBest = crun.score; save('cliff_crun_best', crunBest); s.crunNewBest = true; }
+    Track.send('endless_run', Math.min(crun.score, 99999) * 10 + reason);   // score x 10 + how it ended
+  }
+  // busy = the stop result is showing, the next cliff's ground is still moving in, or the run is over
+  function crunBusy(now) {
+    if (s.crunOver && (s.state === 'stopped' || s.state === 'falling' || s.state === 'fell')) return true;
+    if (s.state === 'stopped') return true;
+    return !!(s.crunIntro && now - s.crunIntro.t0 < CRUN_TR);
+  }
+  function crunAdvance(now) {                      // after a stop that keeps the run going: the next cliff
+    const fromGap = Math.max(0, s.result / 100);
+    const sx0 = CAM_ANCHOR_X + (s.x * PPM - cam.fx) * cam.z, z0 = cam.z;   // where the car is on screen now
+    newRound();
+    s.crunIntro = { t0: now, fromGap, sx0, z0 };
+    if (s.crunR.world && (s.crunR.k - 1) % 10 === 0 && s.crunR.k > 1) s.crunWorldAt = now;   // a new world
+  }
   function endRun() {
     s.runOver = true; s.missed = true; s.runScore = endless.score;
     Track.send('endless_run', endless.score);      // web build only
@@ -1738,7 +1851,7 @@
     rememberTry(false);
     fallsThisSession++;
     s.fallTiming = fallsThisSession === 1 ? FALL_FULL : FALL_SHORT;
-    if (s.endless) endRun(); else if (!s.friend && !s.daily) { if (s.replay) { s.missed = true; addFail(s.cliff); } else missCliff(); }
+    if (s.crun) crunOver(1); else if (s.endless) endRun(); else if (!s.friend && !s.daily) { if (s.replay) { s.missed = true; addFail(s.cliff); } else missCliff(); }
     s.state = 'falling';
     s.endAt = performance.now();
     s.fallT = 0;
@@ -1849,8 +1962,9 @@
         s.result = s.gap * 100;                       // centimeters, decided at the release moment
         rememberTry(true);
         if (s.friend) { s.friendWin = s.friend.score === null || s.result < s.friend.score; if (s.friendWin) s.friend.won = true; }
-        if (best === null || s.result < best) { best = s.result; save('cliff_best', best); s.newBest = true; }
-        if (s.daily) {
+        if (!s.crun && (best === null || s.result < best)) { best = s.result; save('cliff_best', best); s.newBest = true; }
+        if (s.crun) crunStop();
+        else if (s.daily) {
           // The round belongs to the day it was made for; after midnight it no longer changes the new day.
           const d = loadJSON('cliff_daily') || getDaily();
           if (d.day === s.dailyDay && (d.best === null || s.result < d.best)) { d.best = s.result; s.newDailyBest = true; saveJSON('cliff_daily', d); }
@@ -1906,6 +2020,12 @@
       }
     } else if ((s.state === 'falling' || s.state === 'fell') && !(s.rescue && s.rescue.state === 'anim')) {
       updateFall(dt);
+    }
+    // Cliff Run: show the result briefly, then the next cliff; a press kept during the move drives once
+    if (s.crun && s.state === 'stopped' && !s.crunOver && now - s.endAt > CRUN_CELEB) crunAdvance(now);
+    if (s.crun && s.state === 'ready' && crunBuf && !crunBusy(now)) {
+      const id = activePointer; activePointer = null; crunBuf = false;
+      if (id !== null) pressGame(id, now);
     }
     // rescue: 3-second offer once the round has ended, then the chosen animation
     if (s.rescue) {
@@ -1976,9 +2096,18 @@
       ft = fBase + (focus - fBase) * near;
     }
     const ease = 1 - Math.exp(-rawDt * (s.parts ? 6 : 5));
-    cam.z += (zt - cam.z) * ease;
-    cam.fx += (ft - cam.fx) * ease;
-    cam.fy += (fyt - cam.fy) * ease;
+    const I = s.crun && s.crunIntro;
+    if (I && performance.now() - I.t0 < CRUN_TR) {
+      // Cliff Run transition: zoom and the car's place on screen move together to the new framing, so the
+      // car never leaves the screen (screen x = anchor + (world x - focus) x zoom)
+      const k = (performance.now() - I.t0) / CRUN_TR, e = 1 - Math.pow(1 - k, 3);
+      const sx1 = CAM_ANCHOR_X + (rearPx - ft) * zt, z = I.z0 + (zt - I.z0) * e, sx = I.sx0 + (sx1 - I.sx0) * e;
+      cam.z = z; cam.fx = rearPx - (sx - CAM_ANCHOR_X) / z; cam.fy += (fyt - cam.fy) * ease;
+    } else {
+      cam.z += (zt - cam.z) * ease;
+      cam.fx += (ft - cam.fx) * ease;
+      cam.fy += (fyt - cam.fy) * ease;
+    }
   }
 
   // ---------- Draw ----------
@@ -2222,6 +2351,93 @@
     }
   }
 
+  // ---- Test build: switch between the two modes (neutral names; MODE A is the one the link opened first)
+  const TEST_BTN = { x: W - 150, y: 50, w: 150, h: 42 };
+  const testLetter = m => ((m === 'cliffrun') === (TEST_FIRST === 'run') ? 'A' : 'B');
+  function testModeBtnVisible() { return s.state === 'ready' || (s.crun ? s.crunOver : roundEnded()); }
+  function drawTestModeBtn() {
+    if (!testModeBtnVisible()) return;
+    const other = testLetter(mode === 'cliffrun' ? 'run' : 'cliffrun');
+    drawPillBtn(TEST_BTN, `MODE ${other} ›`, 'rgba(255,255,255,0.92)', '#12141f', 17);
+    text(`MODE ${testLetter(mode)}`, W / 2, 112, 15, 'rgba(255,255,255,0.75)', 900);
+  }
+  function switchTestMode() {
+    if (mode === 'cliffrun') { mode = 'run'; crun = null; } else { mode = 'cliffrun'; crun = newCrun(); }
+    crunBuf = false; activePointer = null; replay = null;
+    newRound();
+  }
+
+  // ---- Cliff Run screen: score, multiplier, strikes, cliff number; the result between cliffs; run over
+  function crunTwists(sp) {
+    const tl = [SURFACES[sp.si].name];
+    if (sp.patches.length) tl.push(sp.patches.map(q => SURFACES[q.si].name + ' PATCH').join(' · '));
+    if (sp.slope) tl.push('DOWNHILL');
+    if (sp.wind) tl.push(sp.wind > 0 ? 'TAIL WIND ›' : '‹ HEAD WIND');
+    if (sp.gs < 1) tl.push('LOW GRAVITY');
+    if (sp.crumble.length) tl.push('CRUMBLING EDGE');
+    if (sp.quake) tl.push('EARTHQUAKE');
+    return tl.length > 2 ? [tl.slice(0, 2).join(' · '), tl.slice(2).join(' · ')] : [tl.join(' · ')];
+  }
+  function drawCrunHud() {
+    const R = s.crunR, now = performance.now(), over = s.crunOver;
+    // score, multiplier, strikes (top left)
+    text('SCORE', 26, 34, 16, '#fff3c4', 900, 'left');
+    text(String(crun.score), 26, 64, 34, '#ffffff', 900, 'left');
+    const m = crun.mult, mx = 26, my = 104;
+    ctx.fillStyle = m > 1 ? '#ffd23f' : 'rgba(10,10,25,0.45)';
+    ctx.beginPath(); ctx.roundRect(mx, my - 15, 54, 30, 15); ctx.fill();
+    ctx.font = '900 20px "Lilita One", system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = m > 1 ? '#12141f' : '#ffffff'; ctx.fillText('×' + m, mx + 27, my + 1);
+    for (let i = 0; i < 2; i++) {                    // the two spare stops (strikes left)
+      const used = i < crun.strikes, cx = mx + 74 + i * 26;
+      ctx.fillStyle = used ? 'rgba(255,90,110,0.9)' : 'rgba(255,255,255,0.9)';
+      ctx.beginPath(); ctx.arc(cx, my, 9, 0, Math.PI * 2); ctx.fill();
+      if (used) { ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(cx - 4, my - 4); ctx.lineTo(cx + 4, my + 4); ctx.moveTo(cx + 4, my - 4); ctx.lineTo(cx - 4, my + 4); ctx.stroke(); }
+    }
+    // where you are (top centre)
+    const wname = R.world ? Physics.WORLDS[R.world - 1].name : 'BEYOND';
+    text(R.boss ? 'BOSS CLIFF · POINTS ×2' : wname, W / 2, 152, R.boss ? 20 : 16, R.boss ? '#ff8fa8' : '#ffffff', 900);
+    text(R.k <= CRUN.list.length ? `CLIFF ${R.k} / ${CRUN.list.length}` : `CLIFF ${R.k}`, W / 2, 180, 24, '#ffd23f', 900);
+    text(`BEST ${crunBest}`, W / 2, 206, 16, '#fff3c4', 900);
+    if (over && (s.state === 'stopped' || s.state === 'falling' || s.state === 'fell')) {
+      // run over: everything in one panel; a tap starts a new run (after 0.6 s)
+      ctx.fillStyle = 'rgba(10,10,25,0.72)'; ctx.beginPath(); ctx.roundRect(W / 2 - 200, 260, 400, 300, 26); ctx.fill();
+      text('RUN OVER', W / 2, 304, 40, '#ff8fa8', 900);
+      text(s.crunReason === 1 ? (s.result === null && s.gap !== null && s.gap > -0.05 ? `OVER BY ${fmt(-s.gap * 100)}!` : 'YOU FELL OFF') : 'THIRD SHORT STOP', W / 2, 348, 22, '#ffffff', 900);
+      text(String(s.crunScore), W / 2, 412, 64, '#ffd23f', 900);
+      text(`${s.crunCliffs} ${s.crunCliffs === 1 ? 'CLIFF' : 'CLIFFS'}`, W / 2, 462, 22, '#ffffff', 900);
+      text(s.crunNewBest ? 'NEW BEST!' : `BEST ${crunBest}`, W / 2, 500, 24, s.crunNewBest ? '#ffd23f' : '#fff3c4', 900);
+      if (now - s.endAt > 600) text(FINE_POINTER ? 'PRESS SPACE OR CLICK TO RUN AGAIN' : 'TAP TO RUN AGAIN', W / 2, 900, 24, '#ffffff', 900);
+      return;
+    }
+    if (s.state === 'ready') {
+      if (!titleGone) drawTitle();
+      crunTwists(s.spec).forEach((l, i) => text(l, W / 2, 250 + i * 26, 20, '#ffffff', 900));
+      if (crunRuns === 1 && R.k <= 2) text('STOP IN THE GOLD = BONUS', W / 2, 520, 22, '#ffd23f', 900);
+      if (crunRuns === 1 && R.k === 1) drawHoldHint();
+    } else if (s.state === 'holding' || s.state === 'sliding') {
+      text(fmt(Math.max(0, gapNow() * 100)), W / 2, 340, 52, 'rgba(255,255,255,0.9)');
+      if (s.state === 'holding' && crunRuns === 1 && R.k === 1) {   // first cliff of the first run: when to let go
+        if (s.crunIdeal === undefined) s.crunIdeal = Physics.releaseS(Math.min(s.target / 2, 50) / 100, s.spec);
+        if (gameTau((now - s.tPress) / 1000) >= s.crunIdeal - 0.12) text('LET GO!', W / 2, 430, 60, '#ffd23f', 900);
+      }
+    } else if (s.state === 'stopped') {
+      text(fmt(s.result), W / 2, 300, 64, s.crunStrike ? '#ff5a6e' : '#ffffff');
+      if (s.crunStrike) text(`TOO SHORT · STRIKE ${crun.strikes}/2`, W / 2, 352, 26, '#ffd0d6', 900);
+      else {
+        text('+' + s.crunPts, W / 2, 352, 34, '#ffe27a', 900);
+        if (s.crunBonus) text(`BONUS! NOW ×${crun.mult}`, W / 2, 396, 26, '#ffd23f', 900);
+        else if (s.crunMult > 1) text('MULTIPLIER BACK TO ×1', W / 2, 396, 20, '#fff3c4', 900);
+        if (s.grade === 'PERFECT') text('PERFECT!', W / 2, 250, 34, '#ffd23f', 900);
+      }
+    }
+    if (s.crunWorldAt && now - s.crunWorldAt < 1300) {        // a new world
+      const a = Math.min(1, (1300 - (now - s.crunWorldAt)) / 300);
+      ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = 'rgba(10,10,25,0.6)'; ctx.fillRect(-PAD - 20, 460, W + 2 * PAD + 40, 70); ctx.restore();
+      text(`WORLD ${R.world} · ${Physics.WORLDS[R.world - 1].name}`, W / 2, 495, 30, '#ffffff', 900);
+    }
+  }
+
   // V4 title: the game name bounces in once per session, until the first press.
   function drawTitle() {
     const t = performance.now() / 1000;
@@ -2258,7 +2474,7 @@
 
   // "DAILY" pill on the home screen (top right, next to the sound button).
   const DAILY_PILL = { x: W - 150, y: 50, w: 132, h: 42 };
-  function pillVisible() { return s.state === 'ready' && !s.friend; }
+  function pillVisible() { return !TEST && s.state === 'ready' && !s.friend; }
   function toggleDaily() {
     if (s.daily) { mode = 'run'; newRound(); return; }
     if (dailyLeft() > 0) { mode = 'daily'; newRound(); }
@@ -2712,7 +2928,7 @@
 
   // ---------- World map ----------
   const MAP_BTN = { x: 74, y: 120, w: 100, h: 40 };
-  function mapBtnVisible() { return screen === 'game' && s.state === 'ready' && !s.daily && !s.friend && ASSIST; }
+  function mapBtnVisible() { return screen === 'game' && s.state === 'ready' && !s.daily && !s.friend && !s.crun && ASSIST; }
   function drawMapBtn() {
     const b = MAP_BTN;
     ctx.save(); ctx.translate(b.x, b.y);
@@ -2976,6 +3192,13 @@
     ctx.translate(-cam.fx, -cam.fy);
 
     const ePx = edgePx();
+    // Cliff Run transition: the ground moves in from where the last stop was to the new edge (the car stays)
+    let crunShift = 0;
+    if (s.crun && s.crunIntro) {
+      const k = Math.min(1, (performance.now() - s.crunIntro.t0) / CRUN_TR), e = 1 - Math.pow(1 - k, 3);
+      crunShift = (1 - e) * ((frontX() + s.crunIntro.fromGap) * PPM - ePx);
+    }
+    ctx.save(); if (crunShift) ctx.translate(crunShift, 0);
     const rock = artW && rockPattern(artW.n);
     ctx.fillStyle = rock || s.surface.side;
     ctx.fillRect(-6000, GROUND_Y + 14, ePx + 6000, 3000);
@@ -3041,8 +3264,23 @@
     }
     if (ASSIST && !s.daily && !s.friend && s.target && !s.parts) {
       // the target zone: stop with the car's nose inside the green strip to clear the cliff
-      const zx1 = edgePx(), zx0 = zx1 - Math.min(s.target, 100) / 100 * PPM;
+      const zx1 = edgePx(), zx0 = zx1 - (s.crun ? s.target : Math.min(s.target, 100)) / 100 * PPM;
       ctx.fillStyle = 'rgba(80,230,120,0.55)'; ctx.fillRect(zx0, GROUND_Y - 1, zx1 - zx0, 15);
+      if (s.crun) {
+        // bonus zone: the part of the green strip nearest the edge (share of the target for the current
+        // multiplier); it gets thinner as the multiplier grows. Gold = stop here and the multiplier goes up.
+        const m = s.state === 'stopped' ? s.crunMult : crun.mult, bw = CRUN.bonusFrac(m) * s.target / 100 * PPM;
+        const glow = 0.75 + 0.25 * Math.sin(performance.now() / 180);
+        ctx.fillStyle = `rgba(255,205,60,${0.9 * glow})`; ctx.fillRect(zx1 - bw, GROUND_Y - 1, bw, 15);
+        ctx.fillStyle = '#fff3c4'; ctx.fillRect(zx1 - bw - 1, GROUND_Y - 4, 2, 18);
+        if (s.state === 'ready' || s.state === 'holding' || s.state === 'sliding') {   // gold flag: what a stop here gives
+          const fx = zx1 - bw - 1;
+          ctx.fillStyle = '#ffd23f'; ctx.fillRect(fx - 1, GROUND_Y - 34, 3, 34);
+          ctx.beginPath(); ctx.roundRect(fx + 2, GROUND_Y - 36, 26, 15, 4); ctx.fill();
+          ctx.font = '900 11px "Lilita One", system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillStyle = '#12141f'; ctx.fillText('×' + Math.min(5, m + 1), fx + 15, GROUND_Y - 28);
+        }
+      }
       ctx.fillStyle = '#5dff8a'; ctx.fillRect(zx0 - 1.5, GROUND_Y - 22, 3, 22);
       // the green flag also shows the wind: it points the way the wind blows
       const fd = (s.spec.wind || 0) < 0 ? -1 : 1;
@@ -3059,6 +3297,7 @@
       ctx.fillStyle = '#c7955a';
       for (let x = edgePx() - 1.6 * PPM + 4; x < edgePx() - 6; x += 12) { ctx.beginPath(); ctx.roundRect(x, GROUND_Y - 6, 10, 7, 3); ctx.fill(); }
     }
+    ctx.restore();                                   // (end of the moving ground)
     if (!s.parts) drawCar();
     ctx.restore();
     if (s.spec.fog && s.world !== 2 && !s.parts) drawFog();
@@ -3086,6 +3325,14 @@
 
     if (s.spec.fog && s.world === 2 && !s.daily) drawStormHaze();
     // HUD (screen space)
+    if (s.crun) {
+      drawCrunHud();
+      if (TEST) drawTestModeBtn();
+      drawMuteIcon();
+      if (s.flashAt) { const f = 1 - (performance.now() - s.flashAt) / 260; if (f > 0) { ctx.fillStyle = `rgba(255,255,255,${0.55 * f})`; fullRect(); } }
+      return;
+    }
+    if (TEST) drawTestModeBtn();
     text(storyDone() ? 'ALL WORLDS ✓' : 'BEST ' + cliffLabel(bestCliff).replace('CLIFF ', ''), 26, 50, 22, '#ffffff', 800, 'left');
 
     drawMuteIcon();
@@ -3094,7 +3341,7 @@
     if (!s.daily && !s.friend) drawCoinCount(26, 84);
 
     // Game link on the end screens; every recorded clip ends on one, so clips carry it. Web build only.
-    if (!IS_PORTAL && roundEnded()) {
+    if (!IS_PORTAL && !TEST && roundEnded()) {
     ctx.font = '700 17px "Lilita One", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgba(10,10,25,0.45)';
@@ -3295,6 +3542,7 @@
   requestAnimationFrame(frame);
   window.__cliff = () => s;   // used only for automated testing
   window.__toClient = (lx, ly) => { const r = canvas.getBoundingClientRect(); return { x: r.left + (lx + PAD) * scale, y: r.top + ly * scale }; };   // testing only
+  window.__crun = () => ({ crun: crun && Object.assign({}, crun), best: crunBest, mode, list: CRUN.list.map(R => ({ k: R.k, world: R.world, group: R.group, role: R.role, base: R.base, ref: R.ref, boss: R.boss, sp: R.sp })), target: k => CRUN.at(k, crun ? crun.seed : 'x').target, bonus: CRUN.BONUS, tr: CRUN_TR, celeb: CRUN_CELEB, busy: () => crunBusy(performance.now()), buf: crunBuf, test: TEST, first: TEST_FIRST, switchMode: () => switchTestMode() });   // testing only
   window.__garage = { open: () => { screen = 'garage'; }, state: () => ({ screen, skin: skin.id, owned: owned.slice(), coins }) };   // testing only
   window.__art = () => ({ car: artReady('car_pinky'), cars: SKINS.filter(k => carArt(k)).length, wheel: artReady('wheel'), bg1: artReady('bg1'), bg2: artReady('bg2'), rock1: artReady('rock1'), rock2: artReady('rock2'), all: Object.keys(ART).length > 0 && Object.keys(ART).every(artReady), count: Object.keys(ART).length, music: Sound.music(), musicTime: Sound.musicTime(), musicData: Object.keys(ART_DATA.music || {}).length, carArt: !!carArt(), world: (worldArt(zoneOf(s)) || {}).n || 0 });   // testing only
   window.__physics = Physics;   // used only for automated testing and tools/sim
